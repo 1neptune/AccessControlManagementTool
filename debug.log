@@ -1,80 +1,80 @@
-2026/07/21 17:12:02 main.go:34: Windows兼容模式已启用，强制使用软件渲染驱动
-2026/07/21 17:12:02 main.go:45: 程序启动
-2026/07/21 17:12:02 db.go:51: 数据库初始化成功: data.db
-2026/07/21 17:12:02 main.go:51: 开始创建Fyne应用
-2026/07/21 17:12:02 main.go:54: 加载应用图标
-2026/07/21 17:12:02 main.go:57: 应用图标设置成功
-2026/07/21 17:12:02 main.go:62: Fyne应用创建成功
-2026/07/21 17:12:02 main.go:64: 开始创建主题
-2026/07/21 17:12:02 main.go:67: 主题创建成功
-2026/07/21 17:12:02 main.go:69: 开始创建主窗口
-2026/07/21 17:12:02 mainwindow.go:83: [MainWindow] 创建主窗口
-2026/07/21 17:12:02 mainwindow.go:128: [MainWindow] 创建功能组件
-2026/07/21 17:12:02 server_dialog.go:43: [ServerDialog] 创建服务器对话框管理器
-2026/07/21 17:12:02 config_window.go:35: [ConfigWindow] 创建配置窗口组件
-2026/07/21 17:12:02 server_table.go:53: [ServerTable] 开始创建服务器表格组件
-2026/07/21 17:12:02 server_table.go:96: [ServerTable] 表格行高设置为: 50.00px
-2026/07/21 17:12:02 server_table.go:65: [ServerTable] 服务器表格组件创建完成
-2026/07/21 17:12:02 search_panel.go:31: [SearchPanel] 开始创建搜索面板组件
-2026/07/21 17:12:02 search_panel.go:40: [SearchPanel] 搜索面板组件创建完成
-2026/07/21 17:12:02 pagination.go:32: [Pagination] 创建分页组件
-2026/07/21 17:12:02 mainwindow.go:195: [MainWindow] 创建UI布局
-2026/07/21 17:12:02 mainwindow.go:286: [MainWindow] UI布局创建完成
-2026/07/21 17:12:02 mainwindow.go:324: [MainWindow] 开始加载服务器列表
-2026/07/21 17:12:02 mainwindow.go:333: [MainWindow] 加载服务器列表成功，共 14 台
-2026/07/21 17:12:02 server_table.go:305: [ServerTable] 设置服务器数据，共 14 台
-2026/07/21 17:12:02 server_table.go:456: [ServerTable] 开始异步检测服务器在线状态
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[68] 172.19.6.75:22 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[65] 172.19.6.100:45422 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[64] 172.19.6.43:22 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[15] 192.168.3.47:46422 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[59] 192.168.3.43:445 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[49] 192.168.21.239:445 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[61] 192.168.21.52:445 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[67] 172.19.6.102:45422 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[51] 192.168.23.129:445 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[62] 172.19.6.46:46022 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[57] 192.168.23.126:445 连通性
-2026/07/21 17:12:02 mainwindow.go:352: [MainWindow] 更新分页信息
-2026/07/21 17:12:02 pagination.go:85: [Pagination] 更新分页信息 - 当前页: 1, 总页数: 2, 每页大小: 8, 总条数: 14
-2026/07/21 17:12:02 pagination.go:111: [Pagination] UI更新完成
-2026/07/21 17:12:02 mainwindow.go:101: [MainWindow] 主窗口创建完成
-2026/07/21 17:12:02 main.go:71: 主窗口创建完成
-2026/07/21 17:12:02 main.go:73: 开始显示主窗口
-2026/07/21 17:12:02 mainwindow.go:110: [MainWindow] 显示主窗口并运行
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[60] 192.168.3.193:445 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[50] 172.19.8.20:445 连通性
-2026/07/21 17:12:02 server_table.go:459: [ServerTable] 检测服务器[58] 172.19.6.41:445 连通性
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 192.168.21.52:445
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[61] 192.168.21.52:445 连通性检测结果: true
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 172.19.8.20:445
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[50] 172.19.8.20:445 连通性检测结果: true
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 172.19.6.100:45422
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[65] 172.19.6.100:45422 连通性检测结果: true
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 172.19.6.41:445
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 192.168.3.43:445
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[58] 172.19.6.41:445 连通性检测结果: true
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 192.168.3.47:46422
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[59] 192.168.3.43:445 连通性检测结果: true
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 172.19.6.43:22
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 192.168.3.193:445
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[15] 192.168.3.47:46422 连通性检测结果: true
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[64] 172.19.6.43:22 连通性检测结果: true
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 172.19.6.75:22
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 192.168.23.126:445
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 172.19.6.102:45422
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[60] 192.168.3.193:445 连通性检测结果: true
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[57] 192.168.23.126:445 连通性检测结果: true
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[68] 172.19.6.75:22 连通性检测结果: true
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[67] 172.19.6.102:45422 连通性检测结果: true
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 192.168.23.129:445
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[51] 192.168.23.129:445 连通性检测结果: true
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 172.19.6.46:46022
-2026/07/21 17:12:02 conn.go:47: 连通性测试成功: 192.168.21.239:445
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[62] 172.19.6.46:46022 连通性检测结果: true
-2026/07/21 17:12:02 server_table.go:461: [ServerTable] 服务器[49] 192.168.21.239:445 连通性检测结果: true
-2026/07/21 17:12:03 app.go:83: *** This application has not been migrated to the fyne.Do threading model ***
-2026/07/21 17:12:03 app.go:84: *** The next major Fyne release will remove this safety! ***
-2026/07/21 17:12:03 app.go:85: *** Read more at https://docs.fyne.io/started/goroutines ***
-2026/07/21 17:12:05 mainwindow.go:281: [MainWindow] 主窗口关闭
-2026/07/21 17:12:05 main.go:76: 程序退出
+2026/07/21 17:30:51 main.go:34: Windows兼容模式已启用，强制使用软件渲染驱动
+2026/07/21 17:30:51 main.go:45: 程序启动
+2026/07/21 17:30:51 db.go:51: 数据库初始化成功: data.db
+2026/07/21 17:30:51 main.go:51: 开始创建Fyne应用
+2026/07/21 17:30:51 main.go:54: 加载应用图标
+2026/07/21 17:30:51 main.go:57: 应用图标设置成功
+2026/07/21 17:30:51 main.go:62: Fyne应用创建成功
+2026/07/21 17:30:51 main.go:64: 开始创建主题
+2026/07/21 17:30:51 main.go:67: 主题创建成功
+2026/07/21 17:30:51 main.go:69: 开始创建主窗口
+2026/07/21 17:30:51 mainwindow.go:83: [MainWindow] 创建主窗口
+2026/07/21 17:30:51 mainwindow.go:128: [MainWindow] 创建功能组件
+2026/07/21 17:30:51 server_dialog.go:43: [ServerDialog] 创建服务器对话框管理器
+2026/07/21 17:30:51 config_window.go:35: [ConfigWindow] 创建配置窗口组件
+2026/07/21 17:30:51 server_table.go:53: [ServerTable] 开始创建服务器表格组件
+2026/07/21 17:30:52 server_table.go:96: [ServerTable] 表格行高设置为: 50.00px
+2026/07/21 17:30:52 server_table.go:65: [ServerTable] 服务器表格组件创建完成
+2026/07/21 17:30:52 search_panel.go:31: [SearchPanel] 开始创建搜索面板组件
+2026/07/21 17:30:52 search_panel.go:40: [SearchPanel] 搜索面板组件创建完成
+2026/07/21 17:30:52 pagination.go:32: [Pagination] 创建分页组件
+2026/07/21 17:30:52 mainwindow.go:195: [MainWindow] 创建UI布局
+2026/07/21 17:30:52 mainwindow.go:286: [MainWindow] UI布局创建完成
+2026/07/21 17:30:52 mainwindow.go:324: [MainWindow] 开始加载服务器列表
+2026/07/21 17:30:52 mainwindow.go:333: [MainWindow] 加载服务器列表成功，共 14 台
+2026/07/21 17:30:52 server_table.go:305: [ServerTable] 设置服务器数据，共 14 台
+2026/07/21 17:30:52 server_table.go:456: [ServerTable] 开始异步检测服务器在线状态
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[60] 192.168.3.193:445 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[57] 192.168.23.126:445 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[59] 192.168.3.43:445 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[65] 172.19.6.100:45422 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[68] 172.19.6.75:22 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[62] 172.19.6.46:46022 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[58] 172.19.6.41:445 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[64] 172.19.6.43:22 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[51] 192.168.23.129:445 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[49] 192.168.21.239:445 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[61] 192.168.21.52:445 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[67] 172.19.6.102:45422 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[50] 172.19.8.20:445 连通性
+2026/07/21 17:30:52 server_table.go:459: [ServerTable] 检测服务器[15] 192.168.3.47:46422 连通性
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 192.168.21.52:445
+2026/07/21 17:30:52 mainwindow.go:352: [MainWindow] 更新分页信息
+2026/07/21 17:30:52 pagination.go:85: [Pagination] 更新分页信息 - 当前页: 1, 总页数: 2, 每页大小: 8, 总条数: 14
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[61] 192.168.21.52:445 连通性检测结果: true
+2026/07/21 17:30:52 pagination.go:111: [Pagination] UI更新完成
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 172.19.6.100:45422
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 172.19.8.20:445
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[65] 172.19.6.100:45422 连通性检测结果: true
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[50] 172.19.8.20:445 连通性检测结果: true
+2026/07/21 17:30:52 mainwindow.go:101: [MainWindow] 主窗口创建完成
+2026/07/21 17:30:52 main.go:71: 主窗口创建完成
+2026/07/21 17:30:52 main.go:73: 开始显示主窗口
+2026/07/21 17:30:52 mainwindow.go:110: [MainWindow] 显示主窗口并运行
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 192.168.23.126:445
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 192.168.3.47:46422
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 172.19.6.46:46022
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 192.168.3.43:445
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[15] 192.168.3.47:46422 连通性检测结果: true
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[62] 172.19.6.46:46022 连通性检测结果: true
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[59] 192.168.3.43:445 连通性检测结果: true
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 172.19.6.102:45422
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[57] 192.168.23.126:445 连通性检测结果: true
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 172.19.6.43:22
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[67] 172.19.6.102:45422 连通性检测结果: true
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 172.19.6.75:22
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 172.19.6.41:445
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[64] 172.19.6.43:22 连通性检测结果: true
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 192.168.23.129:445
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[68] 172.19.6.75:22 连通性检测结果: true
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[58] 172.19.6.41:445 连通性检测结果: true
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[51] 192.168.23.129:445 连通性检测结果: true
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 192.168.3.193:445
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[60] 192.168.3.193:445 连通性检测结果: true
+2026/07/21 17:30:52 conn.go:47: 连通性测试成功: 192.168.21.239:445
+2026/07/21 17:30:52 server_table.go:461: [ServerTable] 服务器[49] 192.168.21.239:445 连通性检测结果: true
+2026/07/21 17:30:52 app.go:83: *** This application has not been migrated to the fyne.Do threading model ***
+2026/07/21 17:30:52 app.go:84: *** The next major Fyne release will remove this safety! ***
+2026/07/21 17:30:52 app.go:85: *** Read more at https://docs.fyne.io/started/goroutines ***
+2026/07/21 17:31:19 mainwindow.go:281: [MainWindow] 主窗口关闭
+2026/07/21 17:31:19 main.go:76: 程序退出
