@@ -1,0 +1,65 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": [
+        "../icons/logo_256.png",
+        "../icons/logo_128.png",
+        "../icons/logo_64.png",
+        "../icons/logo_48.png",
+        "../icons/logo_32.png",
+        "../icons/logo_16.png"
+      ]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {
+          "name": "访问控制配置工具",
+          "version": "1.0.0.0"
+        },
+        "description": "基于Go语言开发的跨平台服务器访问控制配置工具",
+        "minimum-os": "win7",
+        "execution-level": "as invoker",
+        "ui-access": false,
+        "auto-elevate": false,
+        "dpi-awareness": "system",
+        "disable-theming": false,
+        "disable-window-filtering": false,
+        "high-resolution-scrolling-aware": false,
+        "ultra-high-resolution-scrolling-aware": false,
+        "long-path-aware": false,
+        "printer-driver-isolation": false,
+        "gdi-scaling": false,
+        "segment-heap": false,
+        "use-common-controls-v6": false
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "1.0.0.0",
+          "product_version": "1.0.0.0"
+        },
+        "info": {
+          "0804": {
+            "Comments": "支持Linux和Windows系统的防火墙策略自动化配置",
+            "CompanyName": "访问控制配置工具",
+            "FileDescription": "服务器访问控制配置工具",
+            "FileVersion": "1.0.0.0",
+            "InternalName": "访问控制配置工具",
+            "LegalCopyright": "Copyright (c) 2026 访问控制配置工具",
+            "LegalTrademarks": "",
+            "OriginalFilename": "访问控制配置工具.exe",
+            "PrivateBuild": "",
+            "ProductName": "访问控制配置工具",
+            "ProductVersion": "1.0.0.0",
+            "SpecialBuild": ""
+          }
+        }
+      }
+    }
+  }
+}
