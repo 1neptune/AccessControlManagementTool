@@ -1024,6 +1024,15 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 	}
 
 	// Step 6: 管理ipset白名单（先创建集合并保存到文件，再启动服务）
+	// 白名单为空时，自动添加127.0.0.1到ipset白名单
+	if ipWhitelist == "" {
+		log.Printf("[Firewall] 白名单为空，自动添加127.0.0.1到ipset白名单")
+		if callback != nil {
+			callback("⚠️ 自动添加127.0.0.1到ipset白名单\n")
+		}
+		ipWhitelist = "127.0.0.1"
+	}
+	
 	if err := manageIpset(client, port, ipWhitelist, callback); err != nil {
 		log.Printf("[Firewall] 管理ipset白名单失败: %v", err)
 		return &ConfigResult{

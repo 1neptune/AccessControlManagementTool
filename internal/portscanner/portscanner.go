@@ -71,3 +71,20 @@ func contains(slice []string, item string) bool {
 	}
 	return false
 }
+
+// RefreshConnectedIPsForPort 刷新指定端口的已建立连接客户端IP列表
+// 参数:
+//   server - 服务器信息
+//   port - 端口号
+// 返回值:
+//   []string - 客户端IP列表
+//   error - 执行过程中的错误
+// 用途:
+//   - 用于配置窗口切换端口时快速刷新关联业务IP
+//   - 根据操作系统类型调用对应的实现
+func RefreshConnectedIPsForPort(server *models.Server, port int) ([]string, error) {
+	if server.OSType == "windows" {
+		return refreshConnectedIPsWindows(server, port)
+	}
+	return refreshConnectedIPsLinux(server, port)
+}

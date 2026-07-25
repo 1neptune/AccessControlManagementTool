@@ -5,6 +5,7 @@ import (
 	"access-control-tool/internal/detector"
 	"access-control-tool/internal/models"
 	"access-control-tool/internal/utils"
+	"fmt"
 	"log"
 	"strconv"
 
@@ -59,55 +60,57 @@ func NewServerDialog(parent fyne.Window, app fyne.App, parentTitle string) *Serv
 //   - 包含消息标签和确定按钮，点击确定关闭弹窗
 //   - 弹窗关闭时自动从messageWins列表中移除
 func (sd *ServerDialog) showMessageWindow(title, message string) {
-	for _, win := range sd.messageWins {
-		if win.Title() == title {
-			win.Close()
-			break
-		}
-	}
-
-	msgWin := sd.app.NewWindow(title)
-	msgWin.SetFixedSize(true)
-
-	msgLabel := widget.NewLabel(message)
-	msgLabel.Wrapping = fyne.TextWrapOff
-	msgLabel.Alignment = fyne.TextAlignCenter
-
-	okBtn := widget.NewButton("确定", func() {
-		msgWin.Close()
-	})
-	okBtn.Resize(fyne.NewSize(120, InputHeight))
-
-	okBorder := canvas.NewRectangle(ColorBorder)
-	okBorder.CornerRadius = CornerRadius
-	okBorder.SetMinSize(fyne.NewSize(120, InputHeight))
-	okField := container.NewStack(okBorder, container.NewPadded(okBtn))
-
-	content := container.NewVBox(
-		NewVSpace(SpacingL),
-		container.NewCenter(msgLabel),
-		NewVSpace(SpacingL),
-		container.NewCenter(okField),
-		NewVSpace(SpacingL),
-	)
-
-	bg := canvas.NewRectangle(ColorBackground)
-	msgWin.SetContent(container.NewStack(bg, content))
-
-	msgWin.SetOnClosed(func() {
-		for i, win := range sd.messageWins {
-			if win == msgWin {
-				sd.messageWins = append(sd.messageWins[:i], sd.messageWins[i+1:]...)
+	fyne.Do(func() {
+		for _, win := range sd.messageWins {
+			if win.Title() == title {
+				win.Close()
 				break
 			}
 		}
+
+		msgWin := sd.app.NewWindow(title)
+		msgWin.SetFixedSize(true)
+
+		msgLabel := widget.NewLabel(message)
+		msgLabel.Wrapping = fyne.TextWrapOff
+		msgLabel.Alignment = fyne.TextAlignCenter
+
+		okBtn := widget.NewButton("确定", func() {
+			msgWin.Close()
+		})
+		okBtn.Resize(fyne.NewSize(120, InputHeight))
+
+		okBorder := canvas.NewRectangle(ColorBorder)
+		okBorder.CornerRadius = CornerRadius
+		okBorder.SetMinSize(fyne.NewSize(120, InputHeight))
+		okField := container.NewStack(okBorder, container.NewPadded(okBtn))
+
+		content := container.NewVBox(
+			NewVSpace(SpacingL),
+			container.NewCenter(msgLabel),
+			NewVSpace(SpacingL),
+			container.NewCenter(okField),
+			NewVSpace(SpacingL),
+		)
+
+		bg := canvas.NewRectangle(ColorBackground)
+		msgWin.SetContent(container.NewStack(bg, content))
+
+		msgWin.SetOnClosed(func() {
+			for i, win := range sd.messageWins {
+				if win == msgWin {
+					sd.messageWins = append(sd.messageWins[:i], sd.messageWins[i+1:]...)
+					break
+				}
+			}
+		})
+
+		msgWin.Resize(fyne.NewSize(480, 160))
+		msgWin.CenterOnScreen()
+		msgWin.Show()
+
+		sd.messageWins = append(sd.messageWins, msgWin)
 	})
-
-	msgWin.Resize(fyne.NewSize(480, 160))
-	msgWin.CenterOnScreen()
-	msgWin.Show()
-
-	sd.messageWins = append(sd.messageWins, msgWin)
 }
 
 // showConfirmWindow 显示确认对话框
@@ -123,72 +126,74 @@ func (sd *ServerDialog) showMessageWindow(title, message string) {
 //   - 点击取消仅关闭对话框
 //   - 对话框关闭时自动从messageWins列表中移除
 func (sd *ServerDialog) showConfirmWindow(title, message string, onConfirm func()) {
-	for _, win := range sd.messageWins {
-		if win.Title() == title {
-			win.Close()
-			break
-		}
-	}
-
-	confirmWin := sd.app.NewWindow(title)
-	confirmWin.SetFixedSize(true)
-
-	msgLabel := widget.NewLabel(message)
-	msgLabel.Wrapping = fyne.TextWrapOff
-	msgLabel.Alignment = fyne.TextAlignCenter
-
-	okBtn := widget.NewButton("确定", func() {
-		confirmWin.Close()
-		if onConfirm != nil {
-			onConfirm()
-		}
-	})
-	okBtn.Resize(fyne.NewSize(120, InputHeight))
-
-	cancelBtn := widget.NewButton("取消", func() {
-		confirmWin.Close()
-	})
-	cancelBtn.Resize(fyne.NewSize(120, InputHeight))
-
-	okBorder := canvas.NewRectangle(ColorBorder)
-	okBorder.CornerRadius = CornerRadius
-	okBorder.SetMinSize(fyne.NewSize(120, InputHeight))
-	okField := container.NewStack(okBorder, container.NewPadded(okBtn))
-
-	cancelBorder := canvas.NewRectangle(ColorBorder)
-	cancelBorder.CornerRadius = CornerRadius
-	cancelBorder.SetMinSize(fyne.NewSize(120, InputHeight))
-	cancelField := container.NewStack(cancelBorder, container.NewPadded(cancelBtn))
-
-	content := container.NewVBox(
-		NewVSpace(SpacingL),
-		container.NewCenter(msgLabel),
-		NewVSpace(SpacingL),
-		container.NewCenter(container.NewHBox(
-			okField,
-			NewHSpace(SpacingM),
-			cancelField,
-		)),
-		NewVSpace(SpacingL),
-	)
-
-	bg := canvas.NewRectangle(ColorBackground)
-	confirmWin.SetContent(container.NewStack(bg, content))
-
-	confirmWin.SetOnClosed(func() {
-		for i, win := range sd.messageWins {
-			if win == confirmWin {
-				sd.messageWins = append(sd.messageWins[:i], sd.messageWins[i+1:]...)
+	fyne.Do(func() {
+		for _, win := range sd.messageWins {
+			if win.Title() == title {
+				win.Close()
 				break
 			}
 		}
+
+		confirmWin := sd.app.NewWindow(title)
+		confirmWin.SetFixedSize(true)
+
+		msgLabel := widget.NewLabel(message)
+		msgLabel.Wrapping = fyne.TextWrapOff
+		msgLabel.Alignment = fyne.TextAlignCenter
+
+		okBtn := widget.NewButton("确定", func() {
+			confirmWin.Close()
+			if onConfirm != nil {
+				onConfirm()
+			}
+		})
+		okBtn.Resize(fyne.NewSize(120, InputHeight))
+
+		cancelBtn := widget.NewButton("取消", func() {
+			confirmWin.Close()
+		})
+		cancelBtn.Resize(fyne.NewSize(120, InputHeight))
+
+		okBorder := canvas.NewRectangle(ColorBorder)
+		okBorder.CornerRadius = CornerRadius
+		okBorder.SetMinSize(fyne.NewSize(120, InputHeight))
+		okField := container.NewStack(okBorder, container.NewPadded(okBtn))
+
+		cancelBorder := canvas.NewRectangle(ColorBorder)
+		cancelBorder.CornerRadius = CornerRadius
+		cancelBorder.SetMinSize(fyne.NewSize(120, InputHeight))
+		cancelField := container.NewStack(cancelBorder, container.NewPadded(cancelBtn))
+
+		content := container.NewVBox(
+			NewVSpace(SpacingL),
+			container.NewCenter(msgLabel),
+			NewVSpace(SpacingL),
+			container.NewCenter(container.NewHBox(
+				okField,
+				NewHSpace(SpacingM),
+				cancelField,
+			)),
+			NewVSpace(SpacingL),
+		)
+
+		bg := canvas.NewRectangle(ColorBackground)
+		confirmWin.SetContent(container.NewStack(bg, content))
+
+		confirmWin.SetOnClosed(func() {
+			for i, win := range sd.messageWins {
+				if win == confirmWin {
+					sd.messageWins = append(sd.messageWins[:i], sd.messageWins[i+1:]...)
+					break
+				}
+			}
+		})
+
+		confirmWin.Resize(fyne.NewSize(480, 160))
+		confirmWin.CenterOnScreen()
+		confirmWin.Show()
+
+		sd.messageWins = append(sd.messageWins, confirmWin)
 	})
-
-	confirmWin.Resize(fyne.NewSize(480, 160))
-	confirmWin.CenterOnScreen()
-	confirmWin.Show()
-
-	sd.messageWins = append(sd.messageWins, confirmWin)
 }
 
 func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
@@ -221,8 +226,17 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 	hostEntry.SetPlaceHolder("主机地址")
 
 	portEntry := widget.NewEntry()
-	portEntry.SetPlaceHolder("SSH端口")
+	portEntry.SetPlaceHolder("默认: LINUX: 22 Windows: 445")
 	portEntry.SetText("22")
+
+	protocolSelect := widget.NewSelect([]string{"SSH", "SMB"}, func(s string) {
+		if s == "SSH" {
+			portEntry.SetText("22")
+		} else {
+			portEntry.SetText("445")
+		}
+	})
+	protocolSelect.SetSelected("SSH")
 
 	usernameEntry := widget.NewEntry()
 	usernameEntry.SetPlaceHolder("用户名")
@@ -231,6 +245,8 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 	passwordEntry.SetPlaceHolder("密码")
 
 	inputWidth := float32(280)
+
+	protocolSelect.Resize(fyne.NewSize(inputWidth, InputHeight))
 
 	nameBorder := canvas.NewRectangle(ColorBorder)
 	nameBorder.CornerRadius = CornerRadius
@@ -241,6 +257,11 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 	hostBorder.CornerRadius = CornerRadius
 	hostBorder.SetMinSize(fyne.NewSize(inputWidth, InputHeight))
 	hostField := container.NewStack(hostBorder, container.NewPadded(hostEntry))
+
+	protocolBorder := canvas.NewRectangle(ColorBorder)
+	protocolBorder.CornerRadius = CornerRadius
+	protocolBorder.SetMinSize(fyne.NewSize(inputWidth, InputHeight))
+	protocolField := container.NewStack(protocolBorder, protocolSelect)
 
 	portBorder := canvas.NewRectangle(ColorBorder)
 	portBorder.CornerRadius = CornerRadius
@@ -270,6 +291,12 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 	hostLabelBg := canvas.NewRectangle(ColorBackground)
 	hostLabelBg.SetMinSize(fyne.NewSize(labelWidth, InputHeight))
 	hostLabelField := container.NewStack(hostLabelBg, container.NewCenter(hostLabel))
+
+	protocolLabel := canvas.NewText("协议 *", ColorText)
+	protocolLabel.TextSize = 14
+	protocolLabelBg := canvas.NewRectangle(ColorBackground)
+	protocolLabelBg.SetMinSize(fyne.NewSize(labelWidth, InputHeight))
+	protocolLabelField := container.NewStack(protocolLabelBg, container.NewCenter(protocolLabel))
 
 	portLabel := canvas.NewText("远程端口 *", ColorText)
 	portLabel.TextSize = 14
@@ -355,23 +382,23 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 				Password: encryptedPassword,
 			}
 
-			connected := utils.TestConnectivity(hostEntry.Text, port)
-			if !connected {
-				log.Printf("[ServerDialog] 端口连通性测试失败: %s:%d", hostEntry.Text, port)
-				fyne.Do(func() {
-					sd.showMessageWindow("错误", "无法连接到服务器，请检查端口")
-					submitBtn.SetText("测试连接")
-					submitBtn.Enable()
-				})
-				return
-			}
+			protocol := protocolSelect.Selected
+			log.Printf("[ServerDialog] 用户选择的协议: %s", protocol)
 
-			log.Printf("[ServerDialog] 端口连通性测试成功: %s:%d", hostEntry.Text, port)
+			if protocol == "SSH" {
+				log.Printf("[ServerDialog] 开始SSH协议连通性测试: %s:%d", hostEntry.Text, port)
+				connected := utils.TestConnectivity(hostEntry.Text, port)
+				if !connected {
+					log.Printf("[ServerDialog] SSH端口连通性测试失败: %s:%d", hostEntry.Text, port)
+					fyne.Do(func() {
+						sd.showMessageWindow("错误", fmt.Sprintf("无法连接到服务器SSH端口 %d，请检查端口连通性", port))
+						submitBtn.SetText("测试连接")
+						submitBtn.Enable()
+					})
+					return
+				}
+				log.Printf("[ServerDialog] SSH端口连通性测试成功: %s:%d", hostEntry.Text, port)
 
-			serviceType := utils.DetectServiceType(hostEntry.Text, port)
-			log.Printf("[ServerDialog] 检测到服务类型: %s", serviceType)
-
-			if serviceType == utils.ServiceSSH {
 				log.Printf("[ServerDialog] 开始检测服务器系统类型(SSH)")
 				osType, osVersion, err := detector.DetectOS(server)
 				if err != nil {
@@ -399,11 +426,27 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 					server.Hostname = hostname
 					log.Printf("[ServerDialog] 系统信息检测成功: 内核版本=%s, 架构=%s, 主机名=%s", kernelVersion, kernelArch, hostname)
 				}
-			} else if serviceType == utils.ServiceSMB || serviceType == utils.ServiceDCOM {
-				log.Printf("[ServerDialog] 开始检测Windows系统类型(%s)", serviceType)
+			} else if protocol == "SMB" {
+				log.Printf("[ServerDialog] 开始SMB协议连通性测试")
+				port445Connected := utils.TestConnectivity(hostEntry.Text, 445)
+				port135Connected := utils.TestConnectivity(hostEntry.Text, 135)
+
+				if !port445Connected || !port135Connected {
+					log.Printf("[ServerDialog] SMB端口连通性测试失败 - 445=%v, 135=%v", port445Connected, port135Connected)
+					fyne.Do(func() {
+						sd.showMessageWindow("错误", "无法连接到服务器，请检查445和135端口的连通性")
+						submitBtn.SetText("测试连接")
+						submitBtn.Enable()
+					})
+					return
+				}
+
+				log.Printf("[ServerDialog] SMB端口连通性测试成功: 445=%v, 135=%v", port445Connected, port135Connected)
+
+				log.Printf("[ServerDialog] 开始检测Windows系统类型(SMB)")
 				osType, osVersion, kernelVersion, kernelArch, hostname, err := detector.DetectWindowsOSAndInfo(server)
 				if err != nil {
-					log.Printf("[ServerDialog] %s连接失败: %v", serviceType, err)
+					log.Printf("[ServerDialog] SMB连接失败: %v", err)
 					fyne.Do(func() {
 						sd.showMessageWindow("错误", "无法连接到服务器，请检查用户名和密码")
 						submitBtn.SetText("测试连接")
@@ -419,14 +462,6 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 				server.KernelArch = kernelArch
 				server.Hostname = hostname
 				log.Printf("[ServerDialog] 系统信息检测成功: 系统版本=%s, 内核版本=%s, 架构=%s, 主机名=%s", osVersion, kernelVersion, kernelArch, hostname)
-			} else {
-				log.Printf("[ServerDialog] 检测到未知服务类型: %s:%d", hostEntry.Text, port)
-				fyne.Do(func() {
-					sd.showMessageWindow("错误", "无法识别服务类型")
-					submitBtn.SetText("测试连接")
-					submitBtn.Enable()
-				})
-				return
 			}
 
 			fyne.Do(func() {
@@ -485,6 +520,14 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 		NewVSpace(SpacingS),
 		container.NewHBox(
 			NewHSpace(SpacingM),
+			protocolLabelField,
+			NewHSpace(SpacingS),
+			protocolField,
+			NewHSpace(SpacingM),
+		),
+		NewVSpace(SpacingS),
+		container.NewHBox(
+			NewHSpace(SpacingM),
 			portLabelField,
 			NewHSpace(SpacingS),
 			portField,
@@ -524,7 +567,7 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 	addWin.SetContent(content)
 	log.Printf("[ServerDialog] 添加窗口设置内容完成，强制固定尺寸")
 	addWin.SetFixedSize(true)
-	addWin.Resize(fyne.NewSize(420, 400))
+	addWin.Resize(fyne.NewSize(420, 450))
 	log.Printf("[ServerDialog] 窗口内容尺寸: %v", addWin.Content().Size())
 	addWin.CenterOnScreen()
 	addWin.Show()
@@ -560,7 +603,24 @@ func (sd *ServerDialog) ShowEditDialog(server models.Server, onSuccess func()) {
 	hostEntry.SetText(server.Host)
 
 	portEntry := widget.NewEntry()
-	portEntry.SetPlaceHolder("SSH端口")
+	portEntry.SetPlaceHolder("默认: LINUX: 22 Windows: 445")
+
+	protocolSelect := widget.NewSelect([]string{"SSH", "SMB"}, func(s string) {
+		if s == "SSH" {
+			portEntry.SetText("22")
+		} else {
+			portEntry.SetText("445")
+		}
+	})
+
+	if server.OSType == "linux" {
+		protocolSelect.SetSelected("SSH")
+	} else if server.OSType == "windows" {
+		protocolSelect.SetSelected("SMB")
+	} else {
+		protocolSelect.SetSelected("SSH")
+	}
+
 	portEntry.SetText(strconv.Itoa(server.SSHPort))
 
 	usernameEntry := widget.NewEntry()
@@ -572,6 +632,8 @@ func (sd *ServerDialog) ShowEditDialog(server models.Server, onSuccess func()) {
 
 	inputWidth := float32(280)
 
+	protocolSelect.Resize(fyne.NewSize(inputWidth, InputHeight))
+
 	nameBorder := canvas.NewRectangle(ColorBorder)
 	nameBorder.CornerRadius = CornerRadius
 	nameBorder.SetMinSize(fyne.NewSize(inputWidth, InputHeight))
@@ -581,6 +643,11 @@ func (sd *ServerDialog) ShowEditDialog(server models.Server, onSuccess func()) {
 	hostBorder.CornerRadius = CornerRadius
 	hostBorder.SetMinSize(fyne.NewSize(inputWidth, InputHeight))
 	hostField := container.NewStack(hostBorder, container.NewPadded(hostEntry))
+
+	protocolBorder := canvas.NewRectangle(ColorBorder)
+	protocolBorder.CornerRadius = CornerRadius
+	protocolBorder.SetMinSize(fyne.NewSize(inputWidth, InputHeight))
+	protocolField := container.NewStack(protocolBorder, protocolSelect)
 
 	portBorder := canvas.NewRectangle(ColorBorder)
 	portBorder.CornerRadius = CornerRadius
@@ -610,6 +677,12 @@ func (sd *ServerDialog) ShowEditDialog(server models.Server, onSuccess func()) {
 	hostLabelBg := canvas.NewRectangle(ColorBackground)
 	hostLabelBg.SetMinSize(fyne.NewSize(labelWidth, InputHeight))
 	hostLabelField := container.NewStack(hostLabelBg, container.NewCenter(hostLabel))
+
+	protocolLabel := canvas.NewText("协议 *", ColorText)
+	protocolLabel.TextSize = 14
+	protocolLabelBg := canvas.NewRectangle(ColorBackground)
+	protocolLabelBg.SetMinSize(fyne.NewSize(labelWidth, InputHeight))
+	protocolLabelField := container.NewStack(protocolLabelBg, container.NewCenter(protocolLabel))
 
 	portLabel := canvas.NewText("远程端口 *", ColorText)
 	portLabel.TextSize = 14
@@ -685,23 +758,23 @@ func (sd *ServerDialog) ShowEditDialog(server models.Server, onSuccess func()) {
 				log.Printf("[ServerDialog] 密码加密成功")
 			}
 
-			connected := utils.TestConnectivity(hostEntry.Text, port)
-			if !connected {
-				log.Printf("[ServerDialog] 端口连通性测试失败: %s:%d", hostEntry.Text, port)
-				fyne.Do(func() {
-					sd.showMessageWindow("错误", "无法连接到服务器，请检查端口")
-					submitBtn.SetText("测试连接")
-					submitBtn.Enable()
-				})
-				return
-			}
+			protocol := protocolSelect.Selected
+			log.Printf("[ServerDialog] 用户选择的协议: %s", protocol)
 
-			log.Printf("[ServerDialog] 端口连通性测试成功: %s:%d", hostEntry.Text, port)
+			if protocol == "SSH" {
+				log.Printf("[ServerDialog] 开始SSH协议连通性测试: %s:%d", hostEntry.Text, port)
+				connected := utils.TestConnectivity(hostEntry.Text, port)
+				if !connected {
+					log.Printf("[ServerDialog] SSH端口连通性测试失败: %s:%d", hostEntry.Text, port)
+					fyne.Do(func() {
+						sd.showMessageWindow("错误", fmt.Sprintf("无法连接到服务器SSH端口 %d，请检查端口连通性", port))
+						submitBtn.SetText("测试连接")
+						submitBtn.Enable()
+					})
+					return
+				}
+				log.Printf("[ServerDialog] SSH端口连通性测试成功: %s:%d", hostEntry.Text, port)
 
-			serviceType := utils.DetectServiceType(hostEntry.Text, port)
-			log.Printf("[ServerDialog] 检测到服务类型: %s", serviceType)
-
-			if serviceType == utils.ServiceSSH {
 				log.Printf("[ServerDialog] 开始检测服务器系统类型(SSH)")
 				osType, osVersion, err := detector.DetectOS(&server)
 				if err != nil {
@@ -727,7 +800,23 @@ func (sd *ServerDialog) ShowEditDialog(server models.Server, onSuccess func()) {
 				server.KernelArch = kernelArch
 				server.Hostname = hostname
 				log.Printf("[ServerDialog] 系统信息检测成功: 内核版本=%s, 架构=%s, 主机名=%s", kernelVersion, kernelArch, hostname)
-			} else if serviceType == utils.ServiceSMB {
+			} else if protocol == "SMB" {
+				log.Printf("[ServerDialog] 开始SMB协议连通性测试")
+				port445Connected := utils.TestConnectivity(hostEntry.Text, 445)
+				port135Connected := utils.TestConnectivity(hostEntry.Text, 135)
+
+				if !port445Connected || !port135Connected {
+					log.Printf("[ServerDialog] SMB端口连通性测试失败 - 445=%v, 135=%v", port445Connected, port135Connected)
+					fyne.Do(func() {
+						sd.showMessageWindow("错误", "无法连接到服务器，请检查445和135端口的连通性")
+						submitBtn.SetText("测试连接")
+						submitBtn.Enable()
+					})
+					return
+				}
+
+				log.Printf("[ServerDialog] SMB端口连通性测试成功: 445=%v, 135=%v", port445Connected, port135Connected)
+
 				log.Printf("[ServerDialog] 开始检测Windows系统类型(SMB)")
 				osType, osVersion, kernelVersion, kernelArch, hostname, err := detector.DetectWindowsOSAndInfo(&server)
 				if err != nil {
@@ -747,14 +836,6 @@ func (sd *ServerDialog) ShowEditDialog(server models.Server, onSuccess func()) {
 				server.KernelArch = kernelArch
 				server.Hostname = hostname
 				log.Printf("[ServerDialog] 系统信息检测成功: 内核版本=%s, 架构=%s, 主机名=%s", kernelVersion, kernelArch, hostname)
-			} else {
-				log.Printf("[ServerDialog] 检测到未知服务类型: %s:%d", hostEntry.Text, port)
-				fyne.Do(func() {
-					sd.showMessageWindow("错误", "无法识别服务类型")
-					submitBtn.SetText("测试连接")
-					submitBtn.Enable()
-				})
-				return
 			}
 
 			fyne.Do(func() {
@@ -808,6 +889,14 @@ func (sd *ServerDialog) ShowEditDialog(server models.Server, onSuccess func()) {
 			hostLabelField,
 			NewHSpace(SpacingS),
 			hostField,
+			NewHSpace(SpacingM),
+		),
+		NewVSpace(SpacingS),
+		container.NewHBox(
+			NewHSpace(SpacingM),
+			protocolLabelField,
+			NewHSpace(SpacingS),
+			protocolField,
 			NewHSpace(SpacingM),
 		),
 		NewVSpace(SpacingS),

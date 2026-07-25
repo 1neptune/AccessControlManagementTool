@@ -116,7 +116,7 @@ func configureWindows(client WinRMClient, server *models.Server, port int, ipWhi
 		}, fmt.Errorf("%v", err)
 	}
 
-	if err := verifyPolicy(client, port, writeOutput); err != nil {
+	if err := verifyPolicy(client, port, ipWhitelist, writeOutput); err != nil {
 		log.Printf("[Firewall] 配置失败: %v", err)
 		return &ConfigResult{
 			Success: false,
@@ -372,13 +372,11 @@ func ensureFilterActionExists(client WinRMClient, actionName, actionType string,
 
 // configurePortRules 配置指定端口的IPsec规则
 // 步骤:
-// 1. 确保允许/拒绝筛选器列表存在
-// 2. 配置白名单筛选器（指定IP的TCP/UDP访问）
-// 3. 配置黑名单筛选器（any地址的TCP/UDP访问）
-// 4. 确保允许/拒绝规则绑定存在
+// 1. 当白名单为空时，只配置拒绝规则（拒绝所有访问，允许127.0.0.1通过系统回环）
+// 2. 当白名单不为空时，配置允许规则（白名单IP）和拒绝规则（其他所有IP）
 // 参数: client - WinRM客户端
 //       port - 目标端口
-//       ipWhitelist - 白名单IP列表
+//       ipWhitelist - 白名单IP列表（空表示只允许127.0.0.1）
 //       writeOutput - 输出回调函数
 // 返回: 错误
 func configurePortRules(client WinRMClient, port int, ipWhitelist string, writeOutput WriteFunc) error {
@@ -386,6 +384,24 @@ func configurePortRules(client WinRMClient, port int, ipWhitelist string, writeO
 	blockListName := fmt.Sprintf("拒绝%d访问", port)
 	allowRuleName := fmt.Sprintf("允许%d访问", port)
 	blockRuleName := fmt.Sprintf("拒绝%d访问", port)
+
+	if ipWhitelist == "" {
+		writeOutput("⚠️ 仅配置拒绝规则   只允许127.0.0.1访问\n")
+
+		if err := ensureFilterListExists(client, blockListName, writeOutput); err != nil {
+			return err
+		}
+
+		if err := configureBlacklistFilters(client, port, blockListName, writeOutput); err != nil {
+			return err
+		}
+
+		if err := ensureRuleExists(client, blockRuleName, policyName, blockListName, filterActionBlock, writeOutput); err != nil {
+			return err
+		}
+
+		return nil
+	}
 
 	if err := ensureFilterListExists(client, allowListName, writeOutput); err != nil {
 		return err
@@ -700,16 +716,16 @@ func refreshPolicy(client WinRMClient, writeOutput WriteFunc) error {
 // verifyPolicy 验证IPsec策略配置是否生效
 // 验证项:
 // 1. 策略是否已分配（Assigned=YES/已分配:是）
-// 2. 允许/拒绝规则是否存在
-// 3. 允许/拒绝筛选器列表是否存在
-// 4. 允许/拒绝筛选器操作是否存在
-// 5. 拒绝IP列表
-// 6. 允许IP列表
+// 2. 当白名单为空时，只检查拒绝规则和拒绝筛选器列表
+// 3. 当白名单不为空时，检查允许/拒绝规则和筛选器列表
+// 4. 拒绝IP列表
+// 5. 允许IP列表（白名单不为空时）
 // 参数: client - WinRM客户端
 //       port - 目标端口
+//       ipWhitelist - 白名单IP列表（空表示只允许127.0.0.1）
 //       writeOutput - 输出回调函数
 // 返回: 错误
-func verifyPolicy(client WinRMClient, port int, writeOutput WriteFunc) error {
+func verifyPolicy(client WinRMClient, port int, ipWhitelist string, writeOutput WriteFunc) error {
 	log.Printf("[Firewall] 验证配置")
 	writeOutput("验证配置...\n")
 
@@ -755,12 +771,14 @@ func verifyPolicy(client WinRMClient, port int, writeOutput WriteFunc) error {
 
 	var rules []string
 
-	checkAllowRuleCmd := fmt.Sprintf(`netsh ipsec static show rule name="%s" policy="%s"`, allowRuleName, policyName)
-	allowRuleOutput, _ := client.Execute(checkAllowRuleCmd)
-	cnAllowRegex := regexp.MustCompile(`名称\s*[：:]\s*` + regexp.QuoteMeta(allowRuleName))
-	enAllowRegex := regexp.MustCompile(`Name\s*=\s*` + regexp.QuoteMeta(allowRuleName))
-	if cnAllowRegex.MatchString(allowRuleOutput) || enAllowRegex.MatchString(allowRuleOutput) {
-		rules = append(rules, allowRuleName)
+	if ipWhitelist != "" {
+		checkAllowRuleCmd := fmt.Sprintf(`netsh ipsec static show rule name="%s" policy="%s"`, allowRuleName, policyName)
+		allowRuleOutput, _ := client.Execute(checkAllowRuleCmd)
+		cnAllowRegex := regexp.MustCompile(`名称\s*[：:]\s*` + regexp.QuoteMeta(allowRuleName))
+		enAllowRegex := regexp.MustCompile(`Name\s*=\s*` + regexp.QuoteMeta(allowRuleName))
+		if cnAllowRegex.MatchString(allowRuleOutput) || enAllowRegex.MatchString(allowRuleOutput) {
+			rules = append(rules, allowRuleName)
+		}
 	}
 
 	checkDenyRuleCmd := fmt.Sprintf(`netsh ipsec static show rule name="%s" policy="%s"`, denyRuleName, policyName)
@@ -784,12 +802,14 @@ func verifyPolicy(client WinRMClient, port int, writeOutput WriteFunc) error {
 
 	var filterLists []string
 
-	checkAllowListCmd := fmt.Sprintf(`netsh ipsec static show filterlist name="%s"`, allowFilterListName)
-	allowListOutput, _ := client.Execute(checkAllowListCmd)
-	cnAllowListRegex := regexp.MustCompile(`名称\s*[：:]\s*` + regexp.QuoteMeta(allowFilterListName))
-	enAllowListRegex := regexp.MustCompile(`Name\s*=\s*` + regexp.QuoteMeta(allowFilterListName))
-	if cnAllowListRegex.MatchString(allowListOutput) || enAllowListRegex.MatchString(allowListOutput) {
-		filterLists = append(filterLists, allowFilterListName)
+	if ipWhitelist != "" {
+		checkAllowListCmd := fmt.Sprintf(`netsh ipsec static show filterlist name="%s"`, allowFilterListName)
+		allowListOutput, _ := client.Execute(checkAllowListCmd)
+		cnAllowListRegex := regexp.MustCompile(`名称\s*[：:]\s*` + regexp.QuoteMeta(allowFilterListName))
+		enAllowListRegex := regexp.MustCompile(`Name\s*=\s*` + regexp.QuoteMeta(allowFilterListName))
+		if cnAllowListRegex.MatchString(allowListOutput) || enAllowListRegex.MatchString(allowListOutput) {
+			filterLists = append(filterLists, allowFilterListName)
+		}
 	}
 
 	checkDenyListCmd := fmt.Sprintf(`netsh ipsec static show filterlist name="%s"`, denyFilterListName)
@@ -807,12 +827,14 @@ func verifyPolicy(client WinRMClient, port int, writeOutput WriteFunc) error {
 
 	var filterActions []string
 
-	checkAllowActionCmd := fmt.Sprintf(`netsh ipsec static show filteraction name="%s"`, filterActionAllow)
-	allowActionOutput, _ := client.Execute(checkAllowActionCmd)
-	cnAllowActionRegex := regexp.MustCompile(`名称\s*[：:]\s*` + regexp.QuoteMeta(filterActionAllow))
-	enAllowActionRegex := regexp.MustCompile(`Name\s*=\s*` + regexp.QuoteMeta(filterActionAllow))
-	if cnAllowActionRegex.MatchString(allowActionOutput) || enAllowActionRegex.MatchString(allowActionOutput) {
-		filterActions = append(filterActions, filterActionAllow)
+	if ipWhitelist != "" {
+		checkAllowActionCmd := fmt.Sprintf(`netsh ipsec static show filteraction name="%s"`, filterActionAllow)
+		allowActionOutput, _ := client.Execute(checkAllowActionCmd)
+		cnAllowActionRegex := regexp.MustCompile(`名称\s*[：:]\s*` + regexp.QuoteMeta(filterActionAllow))
+		enAllowActionRegex := regexp.MustCompile(`Name\s*=\s*` + regexp.QuoteMeta(filterActionAllow))
+		if cnAllowActionRegex.MatchString(allowActionOutput) || enAllowActionRegex.MatchString(allowActionOutput) {
+			filterActions = append(filterActions, filterActionAllow)
+		}
 	}
 
 	checkDenyActionCmd := fmt.Sprintf(`netsh ipsec static show filteraction name="%s"`, filterActionBlock)
@@ -837,16 +859,20 @@ func verifyPolicy(client WinRMClient, port int, writeOutput WriteFunc) error {
 	log.Printf("[Firewall] 发现拒绝IP: %v", denyIPs)
 	writeOutput(fmt.Sprintf("✅ 发现拒绝IP: [%s]\n", strings.Join(denyIPs, " ")))
 
-	writeOutput("检查允许IP...\n")
-	allowFilterListCmd := fmt.Sprintf(`netsh ipsec static show filterlist name="%s" level=verbose`, allowFilterListName)
-	allowOutput, err := client.Execute(allowFilterListCmd)
-	if err != nil {
-		log.Printf("[Firewall] 列出允许筛选器列表失败: %v", err)
-	}
+	if ipWhitelist != "" {
+		writeOutput("检查允许IP...\n")
+		allowFilterListCmd := fmt.Sprintf(`netsh ipsec static show filterlist name="%s" level=verbose`, allowFilterListName)
+		allowOutput, err := client.Execute(allowFilterListCmd)
+		if err != nil {
+			log.Printf("[Firewall] 列出允许筛选器列表失败: %v", err)
+		}
 
-	allowIPs := parseIPsFromFilterList(allowOutput)
-	log.Printf("[Firewall] 发现允许IP: %v", allowIPs)
-	writeOutput(fmt.Sprintf("✅ 发现允许IP: [%s]\n", strings.Join(allowIPs, " ")))
+		allowIPs := parseIPsFromFilterList(allowOutput)
+		log.Printf("[Firewall] 发现允许IP: %v", allowIPs)
+		writeOutput(fmt.Sprintf("✅ 发现允许IP: [%s]\n", strings.Join(allowIPs, " ")))
+	} else {
+		writeOutput("⚠️ 白名单为空，仅配置拒绝规则（只允许127.0.0.1访问）\n")
+	}
 
 	log.Printf("[Firewall] 配置验证通过")
 	writeOutput("✅ 配置验证通过\n")

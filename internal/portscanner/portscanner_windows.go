@@ -1,6 +1,7 @@
 package portscanner
 
 import (
+	"access-control-tool/internal/models"
 	"access-control-tool/internal/smb"
 	"log"
 	"strconv"
@@ -139,5 +140,92 @@ func scanWindowsPorts(client *smb.Client) ([]PortInfo, error) {
 
 	log.Printf("[PortScanner] Windows端口扫描完成，共发现 %d 个端口", len(result))
 	return result, nil
+}
+
+// refreshConnectedIPsWindows Windows平台刷新指定端口的连接IP
+// 参数:
+//   server - 服务器信息
+//   port - 端口号
+// 返回值:
+//   []string - 客户端IP列表
+//   error - 执行过程中的错误
+func refreshConnectedIPsWindows(server *models.Server, port int) ([]string, error) {
+	log.Printf("[PortScanner] 获取Windows端口 %d 的连接IP", port)
+
+	client, err := smb.NewClient(server)
+	if err != nil {
+		log.Printf("[PortScanner] 创建SMB客户端失败: %v", err)
+		return nil, err
+	}
+	defer client.Close()
+
+	output, err := client.Execute("netstat -ano")
+	if err != nil {
+		log.Printf("[PortScanner] 执行命令失败: %v", err)
+		return nil, err
+	}
+
+	log.Printf("[PortScanner] 连接状态输出长度: %d 字节", len(output))
+
+	connectedIPs := make([]string, 0)
+	seenIPs := make(map[string]bool)
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 5 {
+			continue
+		}
+
+		state := parts[3]
+		localAddr := parts[1]
+		remoteAddr := parts[2]
+
+		if state != "ESTABLISHED" {
+			continue
+		}
+
+		if strings.HasPrefix(localAddr, "127.0.0.1:") || strings.HasPrefix(localAddr, "[::1]:") {
+			continue
+		}
+
+		portStr := localAddr
+		if idx := strings.LastIndex(portStr, ":"); idx != -1 {
+			portStr = portStr[idx+1:]
+		}
+
+		localPort, err := strconv.Atoi(portStr)
+		if err != nil {
+			continue
+		}
+
+		if localPort != port {
+			continue
+		}
+
+		remoteIP := remoteAddr
+		if idx := strings.LastIndex(remoteIP, ":"); idx != -1 {
+			remoteIP = remoteIP[:idx]
+		}
+
+		if remoteIP == "0.0.0.0" || remoteIP == "::" {
+			continue
+		}
+
+		if seenIPs[remoteIP] {
+			continue
+		}
+
+		connectedIPs = append(connectedIPs, remoteIP)
+		seenIPs[remoteIP] = true
+		log.Printf("[PortScanner] Windows端口 %d 发现连接IP: %s", port, remoteIP)
+	}
+
+	log.Printf("[PortScanner] Windows端口 %d 发现 %d 个连接IP", port, len(connectedIPs))
+	return connectedIPs, nil
 }
 

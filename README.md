@@ -192,6 +192,12 @@ Cause: APIUnavailable: WGL: The driver does not appear to support OpenGL
 
 ![Windows配置访问控制](Windows配置访问控制.png)
 
+**无白名单配置（仅允许127.0.0.1访问）**
+
+当未输入白名单IP时，系统默认只允许127.0.0.1访问，并弹出确认提示。IPsec仅配置拒绝规则，不配置允许规则。
+
+![Windows无白名单配置](Windows无白名单配置.png)
+
 **取消访问控制**
 
 ![Windows取消访问控制](Windows取消访问控制.png)
@@ -201,6 +207,12 @@ Cause: APIUnavailable: WGL: The driver does not appear to support OpenGL
 **配置访问控制**
 
 ![Linux配置访问控制](Linux配置访问控制.png)
+
+**无白名单配置（自动添加127.0.0.1到ipset）**
+
+当未输入白名单IP时，系统自动将127.0.0.1加入ipset白名单，并弹出确认提示。
+
+![Linux无白名单配置](Linux无白名单配置.png)
 
 **取消访问控制**
 

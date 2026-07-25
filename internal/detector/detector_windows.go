@@ -7,10 +7,29 @@ import (
 	"strings"
 )
 
-// DetectWindowsOSAndInfo 检测Windows操作系统及详细信息
+// DetectWindowsOSAndInfo 检测Windows操作系统及详细信息（完整版）
 // 使用wmic命令获取系统信息，包括系统名称、版本、内核版本、架构和主机名
-// 参数: server - 目标服务器信息
-// 返回: 系统类型(windows)、系统名称、内核版本、架构、主机名和错误
+// 参数:
+//   server - 目标服务器信息，包含主机地址、端口、用户名、密码等
+// 返回值:
+//   string - 系统类型（固定返回"windows"）
+//   string - 系统名称（如 "Microsoft Windows Server 2019"）
+//   string - 内核版本（如 "10.0.17763"）
+//   string - 系统架构（如 "x86_64"）
+//   string - 主机名（服务器的主机名称）
+//   error - 检测过程中的错误，连接失败或命令执行失败时返回
+// 执行流程:
+//   1. 创建SMB客户端并建立连接
+//   2. 执行wmic命令获取系统信息：
+//      - wmic os get Caption,Version,OSArchitecture /format:list
+//      - wmic computersystem get Name /format:list
+//   3. 解析命令输出，提取系统名称、内核版本、架构和主机名
+//   4. 将架构代码映射为标准名称
+//   5. 返回检测结果
+// 注意点:
+//   - 使用defer client.Close()确保SMB连接在函数结束时关闭
+//   - wmic命令需要管理员权限才能执行
+//   - 如果系统名称为空，默认使用"Windows"
 func DetectWindowsOSAndInfo(server *models.Server) (string, string, string, string, string, error) {
 	log.Printf("[Detector] 开始检测Windows操作系统及详细信息，服务器: %s:%d", server.Host, server.SSHPort)
 
@@ -45,11 +64,18 @@ func DetectWindowsOSAndInfo(server *models.Server) (string, string, string, stri
 	return "windows", osName, kernelVersion, arch, hostname, nil
 }
 
-// parseWMICValue 从wmic输出中解析指定键的值
-// wmic输出格式为 "Key=Value"，逐行查找匹配的键并返回对应的值
-// 参数: output - wmic命令输出
-//       key - 要查找的键名
-// 返回: 键对应的值（空字符串表示未找到）
+// parseWMICValue 从wmic命令输出中解析指定键的值
+// wmic命令使用/format:list时输出格式为 "Key=Value"，逐行查找匹配的键
+// 参数:
+//   output - wmic命令的输出文本
+//   key - 要查找的键名（如 "Caption"、"Version"、"OSArchitecture"）
+// 返回值:
+//   string - 键对应的值（空字符串表示未找到）
+// 解析逻辑:
+//   1. 将输出按换行符分割为行
+//   2. 遍历每行，查找以"key="开头的行
+//   3. 提取"key="之后的内容，去除首尾空白
+//   4. 返回提取的值
 func parseWMICValue(output string, key string) string {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
@@ -62,12 +88,16 @@ func parseWMICValue(output string, key string) string {
 }
 
 // mapWMICArch 将wmic返回的架构代码映射为标准架构名称
-// 支持的映射:
-// - 包含"64" -> x86_64
-// - 包含"32" -> x86
-// - 包含"ARM" -> ARM64
-// 参数: arch - wmic返回的架构字符串
-// 返回: 标准架构名称
+// wmic返回的OSArchitecture字段值可能为"64-bit"、"32-bit"、"ARM64"等
+// 参数:
+//   arch - wmic返回的架构字符串（如 "64-bit"、"32-bit"）
+// 返回值:
+//   string - 标准架构名称（如 "x86_64"、"x86"、"ARM64"）
+// 映射规则:
+//   - 包含"64" -> x86_64
+//   - 包含"32" -> x86
+//   - 包含"ARM" -> ARM64
+//   - 其他 -> Unknown
 func mapWMICArch(arch string) string {
 	arch = strings.TrimSpace(arch)
 	if strings.Contains(arch, "64") {
@@ -84,9 +114,16 @@ func mapWMICArch(arch string) string {
 
 // parseCmdValue 从cmd命令输出中解析指定环境变量的值
 // 格式为 "VAR=value"，逐行查找匹配的变量名
-// 参数: output - cmd命令输出
-//       key - 变量名
-// 返回: 变量值（空字符串表示未找到）
+// 参数:
+//   output - cmd命令的输出文本（如 "echo PROCESSOR_ARCHITECTURE=%PROCESSOR_ARCHITECTURE%" 的输出）
+//   key - 环境变量名（如 "PROCESSOR_ARCHITECTURE"）
+// 返回值:
+//   string - 环境变量的值（空字符串表示未找到）
+// 解析逻辑:
+//   1. 将输出按换行符分割为行
+//   2. 遍历每行，查找以"key="开头的行
+//   3. 提取"key="之后的内容，去除首尾空白
+//   4. 返回提取的值
 func parseCmdValue(output string, key string) string {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
@@ -100,8 +137,15 @@ func parseCmdValue(output string, key string) string {
 
 // parseHostname 从命令输出中解析主机名
 // 查找不包含"="、"["、":"的非空行作为主机名
-// 参数: output - 命令输出
-// 返回: 主机名（空字符串表示未找到）
+// 参数:
+//   output - 命令输出文本（如 hostname 命令的输出）
+// 返回值:
+//   string - 主机名（空字符串表示未找到）
+// 解析逻辑:
+//   1. 将输出按换行符分割为行
+//   2. 遍历每行，跳过空行
+//   3. 查找不包含"="、"["、":"的行（排除变量赋值、版本信息等）
+//   4. 返回找到的第一行作为主机名
 func parseHostname(output string) string {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
@@ -117,9 +161,16 @@ func parseHostname(output string) string {
 }
 
 // parseVerVersion 从ver命令输出中解析Windows版本号
-// ver命令输出格式为 "Microsoft Windows [版本 10.0.19045]"
-// 参数: output - ver命令输出
-// 返回: 版本号（如 "10.0.19045"）
+// ver命令输出格式为 "Microsoft Windows [版本 10.0.19045]"（中文）或 "Microsoft Windows [Version 10.0.19045]"（英文）
+// 参数:
+//   output - ver命令的输出文本
+// 返回值:
+//   string - 版本号（如 "10.0.19045"）
+// 解析逻辑:
+//   1. 将输出按换行符分割为行
+//   2. 遍历每行，查找包含"[Version "、"[版本 "或"["的行
+//   3. 提取方括号内的内容，去除"Version "或"版本 "前缀
+//   4. 返回版本号
 func parseVerVersion(output string) string {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
@@ -146,9 +197,16 @@ func parseVerVersion(output string) string {
 }
 
 // parseOSName 从systeminfo命令输出中解析操作系统名称
-// 支持中英文输出格式: "OS Name: xxx" 或 "OS 名称: xxx"
-// 参数: output - systeminfo命令输出
-// 返回: 操作系统名称（空字符串表示未找到）
+// 支持中英文输出格式: "OS Name: xxx"（英文）或 "OS 名称: xxx"（中文）
+// 参数:
+//   output - systeminfo命令的输出文本
+// 返回值:
+//   string - 操作系统名称（空字符串表示未找到）
+// 解析逻辑:
+//   1. 将输出按换行符分割为行
+//   2. 遍历每行，查找以"OS Name:"或"OS 名称:"开头的行
+//   3. 使用":"分割，提取第二部分
+//   4. 返回提取的名称
 func parseOSName(output string) string {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
@@ -165,9 +223,17 @@ func parseOSName(output string) string {
 
 // parseRegValue 从reg query命令输出中解析注册表值
 // 查找包含指定值名和"REG_SZ"的行，提取值内容
-// 参数: output - reg query命令输出
-//       valueName - 注册表值名称
-// 返回: 注册表值（空字符串表示未找到）
+// 参数:
+//   output - reg query命令的输出文本
+//   valueName - 注册表值名称（如 "ProductName"）
+// 返回值:
+//   string - 注册表值（空字符串表示未找到）
+// 解析逻辑:
+//   1. 将输出按换行符分割为行
+//   2. 遍历每行，查找以valueName开头的行
+//   3. 在该行中查找"REG_SZ"标记
+//   4. 提取"REG_SZ"之后的内容
+//   5. 返回提取的值
 func parseRegValue(output string, valueName string) string {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
@@ -186,8 +252,29 @@ func parseRegValue(output string, valueName string) string {
 
 // mapVersionToOSName 根据内核版本号映射操作系统名称
 // 通过版本号前缀判断具体的Windows版本，如10.0.22xxx对应Windows 11
-// 参数: version - 内核版本号（如 "10.0.19045"）
-// 返回: 操作系统名称
+// 参数:
+//   version - 内核版本号（如 "10.0.19045"）
+// 返回值:
+//   string - 操作系统名称（如 "Windows 10 22H2"、"Windows Server 2019"）
+// 映射规则:
+//   - 10.0.26xxx -> Windows 11 24H2
+//   - 10.0.22xxx -> Windows 11 22H2
+//   - 10.0.20xxx -> Windows 10 21H2
+//   - 10.0.19xxx -> Windows 10 22H2
+//   - 10.0.18xxx -> Windows 10 1809
+//   - 10.0.17xxx -> Windows 10 1709
+//   - 10.0.16xxx -> Windows 10 1607
+//   - 10.0.15xxx -> Windows 10 1511
+//   - 10.0.14xxx -> Windows Server 2016
+//   - 10.0.10xxx -> Windows 10
+//   - 6.3xxx -> Windows 8.1
+//   - 6.2xxx -> Windows 8
+//   - 6.1xxx -> Windows 7
+//   - 6.0xxx -> Windows Vista
+//   - 5.2xxx -> Windows Server 2003
+//   - 5.1xxx -> Windows XP
+//   - 5.0xxx -> Windows 2000
+//   - 其他 -> "Windows " + 版本号
 func mapVersionToOSName(version string) string {
 	version = strings.TrimSpace(version)
 	if version == "" {
@@ -250,14 +337,19 @@ func mapVersionToOSName(version string) string {
 }
 
 // mapArchCode 将PROCESSOR_ARCHITECTURE环境变量值映射为标准架构名称
-// 支持的映射:
-// - AMD64 -> x86_64
-// - X86 -> x86
-// - ARM64 -> ARM64
-// - ARM -> ARM
-// - IA64 -> IA64
-// 参数: code - PROCESSOR_ARCHITECTURE值
-// 返回: 标准架构名称
+// PROCESSOR_ARCHITECTURE是Windows环境变量，值可能为AMD64、X86、ARM64等
+// 参数:
+//   code - PROCESSOR_ARCHITECTURE环境变量的值（如 "AMD64"、"X86"）
+// 返回值:
+//   string - 标准架构名称（如 "x86_64"、"x86"、"ARM64"）
+// 映射规则:
+//   - AMD64 -> x86_64
+//   - X86 -> x86
+//   - ARM64 -> ARM64
+//   - ARM -> ARM
+//   - IA64 -> IA64
+//   - 空字符串 -> Unknown
+//   - 其他 -> 原值
 func mapArchCode(code string) string {
 	switch strings.ToUpper(strings.TrimSpace(code)) {
 	case "AMD64":
@@ -280,8 +372,16 @@ func mapArchCode(code string) string {
 
 // parseValueFromLine 从冒号分隔的行中解析值部分
 // 格式为 "key: value"，返回冒号后的内容
-// 参数: line - 单行文本
-// 返回: 值部分（空字符串表示格式不正确）
+// 参数:
+//   line - 单行文本（如 "OS Name: Microsoft Windows Server 2019"）
+// 返回值:
+//   string - 值部分（如 "Microsoft Windows Server 2019"）
+// 解析逻辑:
+//   1. 去除首尾空白
+//   2. 如果行为空，返回空字符串
+//   3. 使用":"分割，最多分割2部分
+//   4. 如果分割成功，返回第二部分（去除首尾空白）
+//   5. 否则返回空字符串
 func parseValueFromLine(line string) string {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -295,9 +395,28 @@ func parseValueFromLine(line string) string {
 }
 
 // DetectSystemInfoWindows 检测Windows系统基础信息（简化版）
-// 使用ver、echo PROCESSOR_ARCHITECTURE和hostname命令获取信息
-// 参数: server - 目标服务器信息
-// 返回: 内核版本、架构、主机名、空字符串和错误
+// 使用ver、echo PROCESSOR_ARCHITECTURE和hostname命令获取信息，比wmic更快速
+// 参数:
+//   server - 目标服务器信息，包含主机地址、端口、用户名、密码等
+// 返回值:
+//   string - 内核版本（如 "10.0.19045"）
+//   string - 系统架构（如 "x86_64"）
+//   string - 主机名（服务器的主机名称）
+//   string - 空字符串（保留兼容，暂无使用）
+//   error - 检测过程中的错误，连接失败或命令执行失败时返回
+// 执行流程:
+//   1. 创建SMB客户端并建立连接
+//   2. 执行命令获取系统信息：
+//      - ver（获取Windows版本）
+//      - echo PROCESSOR_ARCHITECTURE=%PROCESSOR_ARCHITECTURE%（获取架构）
+//      - hostname（获取主机名）
+//   3. 解析命令输出，提取内核版本、架构和主机名
+//   4. 将架构代码映射为标准名称
+//   5. 返回检测结果
+// 注意点:
+//   - 使用defer client.Close()确保SMB连接在函数结束时关闭
+//   - 此函数是简化版，比DetectWindowsOSAndInfo更快速但信息较少
+//   - 不获取操作系统名称，只获取内核版本、架构和主机名
 func DetectSystemInfoWindows(server *models.Server) (string, string, string, string, error) {
 	log.Printf("[Detector] 检测Windows系统信息")
 

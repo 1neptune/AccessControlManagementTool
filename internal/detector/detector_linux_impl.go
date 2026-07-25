@@ -9,14 +9,25 @@ import (
 )
 
 // DetectOS 检测Linux服务器的操作系统类型和版本
+// 通过SSH连接执行命令读取发行版信息文件，识别Linux发行版
 // 参数:
-//   server - 服务器信息
+//   server - 服务器信息，包含主机地址、端口、用户名、密码等
 // 返回值:
-//   string - 操作系统类型（linux）
-//   string - 操作系统版本
-//   error - 检测过程中的错误
-// 注意:
-//   此函数仅用于Linux服务器，不检测Windows系统
+//   string - 操作系统类型（固定返回"linux"）
+//   string - 操作系统版本（如 "CentOS Linux 7"、"Ubuntu 22.04"）
+//   error - 检测过程中的错误，连接失败或命令执行失败时返回
+// 执行流程:
+//   1. 创建SSH客户端并建立连接
+//   2. 执行命令读取发行版信息，按优先级尝试:
+//      - cat /etc/os-release（标准Linux发行版）
+//      - cat /etc/redhat-release（CentOS/RHEL旧版本）
+//      - uname -a（通用回退）
+//   3. 解析命令输出，提取发行版名称和版本
+//   4. 返回检测结果
+// 注意点:
+//   - 此函数仅用于Linux服务器，不检测Windows系统
+//   - 使用defer client.Close()确保SSH连接在函数结束时关闭
+//   - 命令执行失败时返回空版本和错误
 func DetectOS(server *models.Server) (string, string, error) {
 	log.Printf("[Detector] 开始检测Linux操作系统类型，服务器: %s:%d", server.Host, server.SSHPort)
 
@@ -47,10 +58,20 @@ func DetectOS(server *models.Server) (string, string, error) {
 }
 
 // parseLinuxVersion 解析Linux版本信息
+// 从命令输出中提取发行版名称和版本号，支持多种格式
 // 参数:
-//   output - os-release文件或uname命令输出
+//   output - /etc/os-release文件、/etc/redhat-release文件或uname命令的输出
 // 返回值:
-//   string - 格式化的版本字符串
+//   string - 格式化的版本字符串（如 "CentOS Linux 7"、"Ubuntu 22.04"）
+// 解析优先级:
+//   1. NAME= + VERSION_ID= 组合（标准格式）
+//   2. PRETTY_NAME=（完整名称）
+//   3. VERSION=（版本字段）
+//   4. 首行文本（回退）
+//   5. "Unknown Linux"（默认）
+// 注意点:
+//   - 自动处理引号（单引号和双引号）
+//   - 去除PRETTY_NAME中括号内的内容
 func parseLinuxVersion(output string) string {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
@@ -94,14 +115,27 @@ func parseLinuxVersion(output string) string {
 }
 
 // DetectSystemInfoLinux 检测Linux系统详细信息
+// 通过SSH连接执行uname命令获取内核版本、架构和主机名
 // 参数:
-//   server - 服务器信息
+//   server - 服务器信息，包含主机地址、端口、用户名、密码等
 // 返回值:
-//   string - 内核版本
-//   string - 内核架构
-//   string - 主机名
-//   string - 发行版名称（空，保留兼容）
-//   error - 检测过程中的错误
+//   string - 内核版本（如 "3.10.0-1160.el7"）
+//   string - 内核架构（如 "x86_64"、"aarch64"）
+//   string - 主机名（服务器的主机名称）
+//   string - 发行版名称（当前版本返回空字符串，保留兼容）
+//   error - 检测过程中的错误，连接失败时返回
+// 执行流程:
+//   1. 创建SSH客户端并建立连接
+//   2. 执行 uname -r 获取内核版本
+//   3. 执行 uname -m 获取内核架构
+//   4. 执行 hostname 获取主机名
+//   5. 清理输出（去除首尾空白）
+//   6. 特殊处理：如果内核版本末尾包含架构后缀，去除后缀
+//   7. 返回检测结果
+// 注意点:
+//   - 使用defer client.Close()确保SSH连接在函数结束时关闭
+//   - 命令执行失败时不返回错误，而是使用空字符串（容错设计）
+//   - 内核版本清理：去除末尾的架构后缀（如 .x86_64）
 func DetectSystemInfoLinux(server *models.Server) (string, string, string, string, error) {
 	log.Printf("[Detector] 检测Linux系统信息，服务器: %s:%d", server.Host, server.SSHPort)
 

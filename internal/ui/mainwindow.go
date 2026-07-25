@@ -10,7 +10,10 @@ import (
 	"image/color"
 	_ "image/png"
 	"log"
+	"runtime"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -18,10 +21,14 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"fyne.io/systray"
 )
 
 //go:embed logo.png
 var logoFS embed.FS
+
+//go:embed logo.ico
+var trayIconFS embed.FS
 
 // MainWindow 主窗口结构体
 // 包含主窗口的所有UI组件和业务逻辑
@@ -58,11 +65,13 @@ type MainWindow struct {
 	deleteBtn    *widget.Button
 	refreshBtn   *widget.Button
 	tableScroll  *container.Scroll
-	openConfigs   map[string]bool
-	searchName    string
+	openConfigs    map[string]bool
+	searchName     string
+	customTitleBar fyne.CanvasObject
 	searchIP      string
 	searchStatus  string
 	searchOSType  string
+	isMinimized   bool
 }
 
 // NewMainWindow 创建主窗口实例
@@ -87,15 +96,17 @@ func NewMainWindow(app fyne.App, theme *LinearTheme) *MainWindow {
 		theme:       theme,
 		app:         app,
 		openConfigs: make(map[string]bool),
+		isMinimized: false,
 	}
 
 	mw.window.Resize(fyne.NewSize(1800, 900))
-	mw.window.SetFixedSize(false)
+	mw.window.SetFixedSize(true)
 	mw.window.SetMaster()
 	mw.window.CenterOnScreen()
 
 	mw.createComponents()
 	mw.createUI()
+	mw.createSystemTray()
 	mw.loadServers()
 
 	log.Printf("[MainWindow] 主窗口创建完成")
@@ -108,7 +119,16 @@ func NewMainWindow(app fyne.App, theme *LinearTheme) *MainWindow {
 //   - 这是应用程序的主入口点，会阻塞直到主窗口关闭
 func (mw *MainWindow) ShowAndRun() {
 	log.Printf("[MainWindow] 显示主窗口并运行")
+
+	if runtime.GOOS == "windows" {
+		go mw.disableMaximizeButton()
+	}
+
 	mw.window.ShowAndRun()
+}
+
+func (mw *MainWindow) Window() fyne.Window {
+	return mw.window
 }
 
 // createComponents 创建所有功能组件
@@ -263,8 +283,15 @@ func (mw *MainWindow) createUI() {
 		paginationBox,
 	)
 
+	var titleBar fyne.CanvasObject
+	if runtime.GOOS == "windows" && mw.customTitleBar != nil {
+		titleBar = mw.customTitleBar
+	} else {
+		titleBar = header
+	}
+
 	content := container.NewBorder(
-		header,
+		titleBar,
 		bottomBar,
 		nil,
 		nil,
@@ -279,6 +306,13 @@ func (mw *MainWindow) createUI() {
 
 	mw.window.SetOnClosed(func() {
 		log.Printf("[MainWindow] 主窗口关闭")
+		systray.Quit()
+	})
+
+	mw.window.SetCloseIntercept(func() {
+		log.Printf("[MainWindow] 主窗口最小化到托盘")
+		mw.isMinimized = true
+		mw.window.Hide()
 	})
 
 	go mw.monitorWindowSize()
@@ -469,6 +503,62 @@ func (mw *MainWindow) applyCurrentSearchConditions() {
 //   5. 如果加载失败，返回一个空的透明占位符
 // 返回值:
 //   fyne.CanvasObject - logo图片对象或透明占位符
+func (mw *MainWindow) createSystemTray() {
+	log.Printf("[MainWindow] 创建系统托盘")
+
+	go func() {
+		systray.Run(func() {
+			iconData, err := trayIconFS.ReadFile("logo.ico")
+			if err != nil {
+				log.Printf("[MainWindow] 加载托盘图标失败: %v", err)
+				return
+			}
+
+			systray.SetIcon(iconData)
+			systray.SetTitle("访问控制配置工具")
+			systray.SetTooltip("访问控制配置工具")
+
+			quitItem := systray.AddMenuItem("退出", "退出应用")
+
+			var clickTimer *time.Timer
+			clickCount := 0
+
+			systray.SetOnTapped(func() {
+				clickCount++
+				if clickTimer != nil {
+					clickTimer.Stop()
+				}
+				if clickCount == 2 {
+					log.Printf("[MainWindow] 托盘双击显示")
+					fyne.Do(func() {
+						mw.isMinimized = false
+						mw.window.Show()
+						mw.window.RequestFocus()
+					})
+					clickCount = 0
+				} else {
+					clickTimer = time.AfterFunc(200*time.Millisecond, func() {
+						clickCount = 0
+					})
+				}
+			})
+
+			for {
+				select {
+				case <-quitItem.ClickedCh:
+					log.Printf("[MainWindow] 托盘点击退出")
+					fyne.Do(func() {
+						mw.window.Close()
+					})
+					return
+				}
+			}
+		}, func() {
+			log.Printf("[MainWindow] 系统托盘退出")
+		})
+	}()
+}
+
 func (mw *MainWindow) loadLogo() fyne.CanvasObject {
 	logoData, err := logoFS.ReadFile("logo.png")
 	if err != nil {
@@ -487,4 +577,64 @@ func (mw *MainWindow) loadLogo() fyne.CanvasObject {
 	logo.SetMinSize(fyne.NewSize(64, 64))
 
 	return logo
+}
+
+
+
+// disableMaximizeButton 禁用主窗口的最大化按钮
+// 功能:
+//   - 在Windows平台上，通过Windows API禁用窗口的最大化按钮
+//   - 禁用后用户无法通过点击最大化按钮或双击标题栏来最大化窗口
+//   - 窗口仍然可以通过编程方式调整大小
+// 原理:
+//   1. 使用FindWindowW查找窗口句柄
+//   2. 使用GetWindowLongPtrW获取当前窗口样式
+//   3. 使用位运算移除WS_MAXIMIZEBOX标志
+//   4. 使用SetWindowLongPtrW设置新的窗口样式
+//   5. 使用SetWindowPos刷新窗口外观
+// 参数:
+//   无
+// 返回值:
+//   无
+// 注意:
+//   - 该函数仅在Windows平台有效，其他平台直接返回
+//   - 需要在窗口显示后调用，因为Fyne框架会在窗口创建时设置初始样式
+func (mw *MainWindow) disableMaximizeButton() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+
+		user32 := syscall.NewLazyDLL("user32.dll")
+		findWindow := user32.NewProc("FindWindowW")
+		getWindowLongPtr := user32.NewProc("GetWindowLongPtrW")
+		setWindowLongPtr := user32.NewProc("SetWindowLongPtrW")
+		setWindowPos := user32.NewProc("SetWindowPos")
+
+		GWL_STYLE := uintptr(0xFFFFFFFFFFFFFFF0)
+		WS_MAXIMIZEBOX := uintptr(0x00010000)
+		SWP_FRAMECHANGED := uintptr(0x0020)
+		SWP_NOSIZE := uintptr(0x0001)
+		SWP_NOMOVE := uintptr(0x0002)
+		SWP_NOZORDER := uintptr(0x0004)
+
+		titlePtr, _ := syscall.UTF16PtrFromString("访问控制配置工具")
+
+		hwnd, _, _ := findWindow.Call(0, uintptr(unsafe.Pointer(titlePtr)))
+		if hwnd == 0 {
+			log.Printf("[MainWindow] 未找到主窗口句柄，无法禁用最大化按钮")
+			return
+		}
+
+		currentStyle, _, _ := getWindowLongPtr.Call(hwnd, GWL_STYLE)
+
+		if currentStyle&WS_MAXIMIZEBOX != 0 {
+			newStyle := currentStyle &^ WS_MAXIMIZEBOX
+			setWindowLongPtr.Call(hwnd, GWL_STYLE, newStyle)
+			setWindowPos.Call(hwnd, 0, 0, 0, 0, 0, SWP_FRAMECHANGED|SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER)
+			log.Printf("[MainWindow] 最大化按钮已禁用")
+		}
+	}()
 }
