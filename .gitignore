@@ -1,0 +1,4 @@
+*.exe
+*.db
+debug.log
+*.log

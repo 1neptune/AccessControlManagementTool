@@ -2,12 +2,14 @@ package ui
 
 import (
 	"access-control-tool/internal/db"
+	"access-control-tool/internal/deployer"
 	"access-control-tool/internal/detector"
 	"access-control-tool/internal/models"
 	"access-control-tool/internal/utils"
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -479,6 +481,8 @@ func (sd *ServerDialog) ShowAddDialog(onSuccess func()) {
 				}
 				sd.showMessageWindow("成功", "服务器添加成功！")
 				addWin.Close()
+
+				sd.showDeployProgressWindow(server)
 			})
 		}()
 	})
@@ -952,4 +956,36 @@ func (sd *ServerDialog) centerWindow(win fyne.Window, width, height float32) {
 	win.CenterOnScreen()
 	win.Show()
 	centerWindowRelativeTo(sd.parentTitle, win.Title(), int32(width), int32(height))
+}
+
+// showDeployProgressWindow 后台静默部署neptune程序
+// 在服务器添加成功后，后台异步执行部署操作，不显示任何进度窗口或结果弹窗
+// 参数:
+//   server - 目标服务器信息
+// 实现流程:
+//   1. 在后台goroutine中异步调用deployer.Deploy执行部署
+//   2. 通过progressCallback记录部署进度到日志
+//   3. 部署完成后记录结果到日志，不显示任何弹窗
+// 注意点:
+//   - 部署操作完全在后台执行，不阻塞UI，不显示任何窗口
+//   - 所有部署进度和结果仅记录到debug.log
+//   - 部署失败不会影响服务器添加操作
+func (sd *ServerDialog) showDeployProgressWindow(server *models.Server) {
+	log.Printf("[ServerDialog] 开始后台静默部署，服务器: %s (%s)", server.Name, server.Host)
+
+	progressCallback := func(msg string) {
+		log.Printf("[Deployer] %s", strings.TrimSpace(msg))
+	}
+
+	go func() {
+		result, err := deployer.Deploy(server, progressCallback)
+
+		if err != nil {
+			log.Printf("[ServerDialog] 部署失败: %v", err)
+		} else if result.Success {
+			log.Printf("[ServerDialog] 部署成功: %s", result.Message)
+		} else {
+			log.Printf("[ServerDialog] 部署未完全成功: %s", result.Message)
+		}
+	}()
 }
