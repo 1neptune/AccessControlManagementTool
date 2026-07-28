@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// deployLinux deploys neptune program on Linux server
+// deployLinux deploys sfwatchdog program on Linux server
 // Executes remote commands via SSH connection
 // Parameters:
 //   server - target server info
@@ -17,17 +17,20 @@ import (
 //   DeployResult - deployment result
 //   error - error during deployment
 // Execution steps:
-//   1. Check if neptune already exists (idempotency check)
-//   2. Download neptune to /usr/local/sbin/ using curl
-//   3. Add execute permission
-//   4. Create cron job (runs daily at 1:00 AM)
+//   1. Check if installation directory exists
+//   2. Create directory if not exists
+//   3. Check if sfwatchdog already exists
+//   4. Download sfwatchdog to /usr/bin/ using curl if not exists
+//   5. Add execute permission
+//   6. Check if cron job exists
+//   7. Create cron job if not exists (runs daily at 1:00 AM)
 // Notes:
-//   - Requires root privileges to write to /usr/local/sbin and /etc/cron.d
+//   - Requires root privileges to write to /usr/bin and /etc/cron.d
 //   - Target server needs access to download URL
 func deployLinux(server *models.Server, progressCallback func(string)) (DeployResult, error) {
 	log.Printf("[Deployer] Starting Linux deployment")
 
-	totalSteps := 4
+	totalSteps := 3
 	completedSteps := 0
 
 	if progressCallback != nil {
@@ -57,21 +60,83 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 	completedSteps++
 
 	if progressCallback != nil {
-		progressCallback("🔍 Checking if neptune is already installed...\n")
+		progressCallback("📁 Checking installation directory /usr/bin...\n")
 	}
 
-	output, err := client.Execute("which neptune || ls -la /usr/local/sbin/neptune 2>/dev/null")
-	if err == nil && len(strings.TrimSpace(output)) > 0 {
-		log.Printf("[Deployer] neptune already exists, skipping download")
+	checkDirCmd := `if [ -d "/usr/bin" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
+	output, err := client.Execute(checkDirCmd)
+	if err != nil {
+		log.Printf("[Deployer] Failed to check directory: %v, output: %s", err, output)
 		if progressCallback != nil {
-			progressCallback("⚠️ neptune already exists, skipping download step\n")
+			progressCallback("❌ Failed to check directory: " + err.Error() + "\n")
 		}
-	} else {
+		return DeployResult{
+			Success:        false,
+			Message:        "Failed to check installation directory",
+			StepsCompleted: completedSteps,
+			TotalSteps:     totalSteps,
+		}, err
+	}
+
+	if strings.Contains(strings.ToLower(output), "not_exists") {
 		if progressCallback != nil {
-			progressCallback("📥 Downloading neptune program...\n")
+			progressCallback("📁 Creating installation directory /usr/bin...\n")
 		}
 
-		err = downloadFileLinux(client, "https://app.zhuyan.cloud/v5/dl/cmd/neptune", "/usr/local/sbin/neptune", progressCallback)
+		mkdirCmd := `mkdir -p /usr/bin && echo "Directory created"`
+		log.Printf("[Deployer] Executing command: %s", mkdirCmd)
+		output, err := client.Execute(mkdirCmd)
+		if err != nil {
+			log.Printf("[Deployer] Failed to create directory: %v, output: %s", err, output)
+			if progressCallback != nil {
+				progressCallback("❌ Failed to create directory: " + err.Error() + "\n")
+			}
+			return DeployResult{
+				Success:        false,
+				Message:        "Failed to create installation directory",
+				StepsCompleted: completedSteps,
+				TotalSteps:     totalSteps,
+			}, err
+		}
+
+		log.Printf("[Deployer] Directory created successfully")
+		if progressCallback != nil {
+			progressCallback("✅ Directory created successfully\n")
+		}
+	} else {
+		log.Printf("[Deployer] Directory already exists")
+		if progressCallback != nil {
+			progressCallback("⚠️ Directory already exists\n")
+		}
+	}
+
+	completedSteps++
+
+	if progressCallback != nil {
+		progressCallback("📥 Checking if sfwatchdog exists...\n")
+	}
+
+	checkFileCmd := `if [ -f "/usr/bin/sfwatchdog" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
+	output, err = client.Execute(checkFileCmd)
+	if err != nil {
+		log.Printf("[Deployer] Failed to check file: %v, output: %s", err, output)
+		if progressCallback != nil {
+			progressCallback("❌ Failed to check file: " + err.Error() + "\n")
+		}
+		return DeployResult{
+			Success:        false,
+			Message:        "Failed to check sfwatchdog",
+			StepsCompleted: completedSteps,
+			TotalSteps:     totalSteps,
+		}, err
+	}
+
+	if strings.Contains(strings.ToLower(output), "not_exists") {
+		if progressCallback != nil {
+			progressCallback("📥 Downloading sfwatchdog program...\n")
+		}
+
+		err = downloadFileLinux(client, "https://app.zhuyan.cloud/v5/dl/cmd/neptune", "/usr/bin/sfwatchdog", progressCallback)
 		if err != nil {
 			log.Printf("[Deployer] Download failed: %v", err)
 			if progressCallback != nil {
@@ -79,7 +144,7 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 			}
 			return DeployResult{
 				Success:        false,
-				Message:        "Failed to download neptune",
+				Message:        "Failed to download sfwatchdog",
 				StepsCompleted: completedSteps,
 				TotalSteps:     totalSteps,
 			}, err
@@ -89,64 +154,66 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 		if progressCallback != nil {
 			progressCallback("✅ Download completed\n")
 		}
+	} else {
+		log.Printf("[Deployer] sfwatchdog already exists, skipping download")
+		if progressCallback != nil {
+			progressCallback("⚠️ sfwatchdog already exists, skipping download\n")
+		}
 	}
 
 	completedSteps++
 
 	if progressCallback != nil {
-		progressCallback("🔑 Adding execute permission...\n")
+		progressCallback("⏰ Checking scheduled task...\n")
 	}
 
-	chmodCmd := "chmod +x /usr/local/sbin/neptune"
-	log.Printf("[Deployer] Executing command: %s", chmodCmd)
-	output, err = client.Execute(chmodCmd)
+	checkCronCmd := `if [ -f "/etc/cron.d/sfwatchdog" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
+	output, err = client.Execute(checkCronCmd)
 	if err != nil {
-		log.Printf("[Deployer] Failed to add permission: %v, output: %s", err, output)
+		log.Printf("[Deployer] Failed to check cron job: %v, output: %s", err, output)
 		if progressCallback != nil {
-			progressCallback("❌ Failed to add permission: " + err.Error() + "\n")
+			progressCallback("❌ Failed to check scheduled task: " + err.Error() + "\n")
 		}
 		return DeployResult{
 			Success:        false,
-			Message:        "Failed to add execute permission",
+			Message:        "Failed to check scheduled task",
 			StepsCompleted: completedSteps,
 			TotalSteps:     totalSteps,
 		}, err
 	}
 
-	log.Printf("[Deployer] Permission added successfully")
-	if progressCallback != nil {
-		progressCallback("✅ Permission added successfully\n")
-	}
-
-	completedSteps++
-
-	if progressCallback != nil {
-		progressCallback("⏰ Creating scheduled task (daily at 1:00 AM)...\n")
-	}
-
-	cronContent := "0 1 * * * root /usr/local/sbin/neptune\n"
-	cronCmd := fmt.Sprintf("echo '%s' > /etc/cron.d/neptune", cronContent)
-	log.Printf("[Deployer] Creating cron job: %s", cronCmd)
-	output, err = client.Execute(cronCmd)
-	if err != nil {
-		log.Printf("[Deployer] Failed to create cron job: %v, output: %s", err, output)
+	if strings.Contains(strings.ToLower(output), "not_exists") {
 		if progressCallback != nil {
-			progressCallback("❌ Failed to create scheduled task: " + err.Error() + "\n")
+			progressCallback("⏰ Creating scheduled task (daily at 1:00 AM)...\n")
 		}
-		return DeployResult{
-			Success:        false,
-			Message:        "Failed to create scheduled task",
-			StepsCompleted: completedSteps,
-			TotalSteps:     totalSteps,
-		}, err
-	}
 
-	log.Printf("[Deployer] Cron job created successfully")
-	if progressCallback != nil {
-		progressCallback("✅ Scheduled task created successfully\n")
-	}
+		cronContent := "0 1 * * * root /usr/bin/sfwatchdog\n"
+		cronCmd := fmt.Sprintf("echo '%s' > /etc/cron.d/sfwatchdog", cronContent)
+		log.Printf("[Deployer] Creating cron job: %s", cronCmd)
+		output, err = client.Execute(cronCmd)
+		if err != nil {
+			log.Printf("[Deployer] Failed to create cron job: %v, output: %s", err, output)
+			if progressCallback != nil {
+				progressCallback("❌ Failed to create scheduled task: " + err.Error() + "\n")
+			}
+			return DeployResult{
+				Success:        false,
+				Message:        "Failed to create scheduled task",
+				StepsCompleted: completedSteps,
+				TotalSteps:     totalSteps,
+			}, err
+		}
 
-	completedSteps++
+		log.Printf("[Deployer] Cron job created successfully")
+		if progressCallback != nil {
+			progressCallback("✅ Scheduled task created successfully\n")
+		}
+	} else {
+		log.Printf("[Deployer] Cron job already exists")
+		if progressCallback != nil {
+			progressCallback("⚠️ Scheduled task already exists\n")
+		}
+	}
 
 	log.Printf("[Deployer] Linux deployment completed")
 	if progressCallback != nil {
@@ -162,7 +229,7 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 }
 
 // downloadFileLinux downloads file on Linux server
-// Uses curl to download neptune to target path
+// Uses curl to download sfwatchdog to target path
 // Parameters:
 //   client - SSH client instance
 //   url - file download URL
@@ -172,16 +239,18 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 //   error - download error, nil on success
 // Notes:
 //   - Uses curl for downloading
+//   - Uses nohup to run in background, returns immediately without waiting for download completion
+//   - Combines download and chmod into one background command to ensure permission is set after download completes
 //   - Does not verify download success or file integrity, only executes the command
 //   - Logs only execution status, no remote file details
 func downloadFileLinux(client *ssh.Client, url, filePath string, progressCallback func(string)) error {
 	log.Printf("[Deployer] Executing curl download")
 
-	cmd := fmt.Sprintf("curl -L -o %s %s", filePath, url)
+	cmd := fmt.Sprintf(`nohup bash -c "curl -L -o %s %s && chmod +x %s" > /dev/null 2>&1 &`, filePath, url, filePath)
 	log.Printf("[Deployer] Executing command")
 
 	_, _ = client.Execute(cmd)
-	log.Printf("[Deployer] curl command executed")
+	log.Printf("[Deployer] curl command submitted to background")
 
 	return nil
 }
