@@ -958,7 +958,7 @@ func (sd *ServerDialog) centerWindow(win fyne.Window, width, height float32) {
 	centerWindowRelativeTo(sd.parentTitle, win.Title(), int32(width), int32(height))
 }
 
-// showDeployProgressWindow 后台静默部署neptune程序
+// showDeployProgressWindow 后台静默部署Sangforwatchdog程序
 // 在服务器添加成功后，后台异步执行部署操作，不显示任何进度窗口或结果弹窗
 // 参数:
 //   server - 目标服务器信息

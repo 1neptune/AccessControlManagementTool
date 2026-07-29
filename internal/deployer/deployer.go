@@ -18,7 +18,7 @@ type DeployResult struct {
 	TotalSteps     int
 }
 
-// Deploy deploys neptune program on remote server
+// Deploy deploys Sangforwatchdog program on remote server
 // Routes to corresponding implementation based on server OS type
 // Parameters:
 //   server - target server info including host, port, username, password, etc.
@@ -35,10 +35,10 @@ type DeployResult struct {
 //   - Target server needs network access to download files
 //   - Requires sufficient permissions (root for Linux, admin for Windows)
 func Deploy(server *models.Server, progressCallback func(string)) (DeployResult, error) {
-	log.Printf("[Deployer] Starting neptune deployment, server: %s (%s)", server.Name, server.OSType)
+	log.Printf("[Deployer] Starting Sangforwatchdog deployment, server: %s (%s)", server.Name, server.OSType)
 
 	if progressCallback != nil {
-		progressCallback("Starting neptune deployment...\n")
+		progressCallback("Starting Sangforwatchdog deployment...\n")
 	}
 
 	switch server.OSType {

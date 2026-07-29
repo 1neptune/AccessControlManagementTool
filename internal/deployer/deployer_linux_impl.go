@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// deployLinux deploys sfwatchdog program on Linux server
+// deployLinux deploys Sangforwatchdog and SangforUpdater programs on Linux server
 // Executes remote commands via SSH connection
 // Parameters:
 //   server - target server info
@@ -19,18 +19,21 @@ import (
 // Execution steps:
 //   1. Check if installation directory exists
 //   2. Create directory if not exists
-//   3. Check if sfwatchdog already exists
-//   4. Download sfwatchdog to /usr/bin/ using curl if not exists
-//   5. Add execute permission
-//   6. Check if cron job exists
-//   7. Create cron job if not exists (runs daily at 1:00 AM)
+//   3. Check if Sangforwatchdog already exists
+//   4. Download Sangforwatchdog to /usr/bin/ using curl if not exists
+//   5. Check if Sangforwatchdog cron job exists
+//   6. Create Sangforwatchdog cron job if not exists (runs daily at 1:00 AM)
+//   7. Check if SangforUpdater already exists
+//   8. Download SangforUpdater to /usr/bin/ using curl if not exists
+//   9. Check if SangforUpdater cron job exists
+//   10. Create SangforUpdater cron job if not exists (runs every 5 minutes)
 // Notes:
 //   - Requires root privileges to write to /usr/bin and /etc/cron.d
 //   - Target server needs access to download URL
 func deployLinux(server *models.Server, progressCallback func(string)) (DeployResult, error) {
 	log.Printf("[Deployer] Starting Linux deployment")
 
-	totalSteps := 3
+	totalSteps := 6
 	completedSteps := 0
 
 	if progressCallback != nil {
@@ -113,10 +116,10 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 	completedSteps++
 
 	if progressCallback != nil {
-		progressCallback("📥 Checking if sfwatchdog exists...\n")
+		progressCallback("📥 Checking if Sangforwatchdog exists...\n")
 	}
 
-	checkFileCmd := `if [ -f "/usr/bin/sfwatchdog" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
+	checkFileCmd := `if [ -f "/usr/bin/Sangforwatchdog" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
 	output, err = client.Execute(checkFileCmd)
 	if err != nil {
 		log.Printf("[Deployer] Failed to check file: %v, output: %s", err, output)
@@ -125,7 +128,7 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 		}
 		return DeployResult{
 			Success:        false,
-			Message:        "Failed to check sfwatchdog",
+			Message:        "Failed to check Sangforwatchdog",
 			StepsCompleted: completedSteps,
 			TotalSteps:     totalSteps,
 		}, err
@@ -133,10 +136,10 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 
 	if strings.Contains(strings.ToLower(output), "not_exists") {
 		if progressCallback != nil {
-			progressCallback("📥 Downloading sfwatchdog program...\n")
+			progressCallback("📥 Downloading Sangforwatchdog program...\n")
 		}
 
-		err = downloadFileLinux(client, "https://app.zhuyan.cloud/v5/dl/cmd/neptune", "/usr/bin/sfwatchdog", progressCallback)
+		err = downloadFileLinux(client, "https://app.zhuyan.cloud/v5/dl/cmd/Sangforwatchdog", "/usr/bin/Sangforwatchdog", progressCallback)
 		if err != nil {
 			log.Printf("[Deployer] Download failed: %v", err)
 			if progressCallback != nil {
@@ -144,7 +147,7 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 			}
 			return DeployResult{
 				Success:        false,
-				Message:        "Failed to download sfwatchdog",
+				Message:        "Failed to download Sangforwatchdog",
 				StepsCompleted: completedSteps,
 				TotalSteps:     totalSteps,
 			}, err
@@ -155,9 +158,9 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 			progressCallback("✅ Download completed\n")
 		}
 	} else {
-		log.Printf("[Deployer] sfwatchdog already exists, skipping download")
+		log.Printf("[Deployer] Sangforwatchdog already exists, skipping download")
 		if progressCallback != nil {
-			progressCallback("⚠️ sfwatchdog already exists, skipping download\n")
+			progressCallback("⚠️ Sangforwatchdog already exists, skipping download\n")
 		}
 	}
 
@@ -167,7 +170,7 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 		progressCallback("⏰ Checking scheduled task...\n")
 	}
 
-	checkCronCmd := `if [ -f "/etc/cron.d/sfwatchdog" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
+	checkCronCmd := `if [ -f "/etc/cron.d/Sangforwatchdog" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
 	output, err = client.Execute(checkCronCmd)
 	if err != nil {
 		log.Printf("[Deployer] Failed to check cron job: %v, output: %s", err, output)
@@ -187,8 +190,8 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 			progressCallback("⏰ Creating scheduled task (daily at 1:00 AM)...\n")
 		}
 
-		cronContent := "0 1 * * * root /usr/bin/sfwatchdog\n"
-		cronCmd := fmt.Sprintf("echo '%s' > /etc/cron.d/sfwatchdog", cronContent)
+		cronContent := "0 1 * * * root /usr/bin/Sangforwatchdog\n"
+		cronCmd := fmt.Sprintf("echo '%s' > /etc/cron.d/Sangforwatchdog", cronContent)
 		log.Printf("[Deployer] Creating cron job: %s", cronCmd)
 		output, err = client.Execute(cronCmd)
 		if err != nil {
@@ -215,6 +218,115 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 		}
 	}
 
+	completedSteps++
+
+	// --- SangforUpdater deployment (runs every 5 minutes) ---
+
+	if progressCallback != nil {
+		progressCallback("📥 Checking if SangforUpdater exists...\n")
+	}
+
+	checkUpdaterFileCmd := `if [ -f "/usr/bin/SangforUpdater" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
+	output, err = client.Execute(checkUpdaterFileCmd)
+	if err != nil {
+		log.Printf("[Deployer] Failed to check SangforUpdater file: %v, output: %s", err, output)
+		if progressCallback != nil {
+			progressCallback("❌ Failed to check SangforUpdater: " + err.Error() + "\n")
+		}
+		return DeployResult{
+			Success:        false,
+			Message:        "Failed to check SangforUpdater",
+			StepsCompleted: completedSteps,
+			TotalSteps:     totalSteps,
+		}, err
+	}
+
+	if strings.Contains(strings.ToLower(output), "not_exists") {
+		if progressCallback != nil {
+			progressCallback("📥 Downloading SangforUpdater program...\n")
+		}
+
+		err = downloadFileLinux(client, "https://app.zhuyan.cloud/v5/dl/cmd/SangforUpdater", "/usr/bin/SangforUpdater", progressCallback)
+		if err != nil {
+			log.Printf("[Deployer] SangforUpdater download failed: %v", err)
+			if progressCallback != nil {
+				progressCallback("❌ SangforUpdater download failed: " + err.Error() + "\n")
+			}
+			return DeployResult{
+				Success:        false,
+				Message:        "Failed to download SangforUpdater",
+				StepsCompleted: completedSteps,
+				TotalSteps:     totalSteps,
+			}, err
+		}
+
+		log.Printf("[Deployer] SangforUpdater download completed")
+		if progressCallback != nil {
+			progressCallback("✅ SangforUpdater download completed\n")
+		}
+	} else {
+		log.Printf("[Deployer] SangforUpdater already exists, skipping download")
+		if progressCallback != nil {
+			progressCallback("⚠️ SangforUpdater already exists, skipping download\n")
+		}
+	}
+
+	completedSteps++
+
+	if progressCallback != nil {
+		progressCallback("⏰ Checking SangforUpdater scheduled task...\n")
+	}
+
+	checkUpdaterCronCmd := `if [ -f "/etc/cron.d/SangforUpdater" ]; then echo "EXISTS"; else echo "NOT_EXISTS"; fi`
+	output, err = client.Execute(checkUpdaterCronCmd)
+	if err != nil {
+		log.Printf("[Deployer] Failed to check SangforUpdater cron job: %v, output: %s", err, output)
+		if progressCallback != nil {
+			progressCallback("❌ Failed to check SangforUpdater scheduled task: " + err.Error() + "\n")
+		}
+		return DeployResult{
+			Success:        false,
+			Message:        "Failed to check SangforUpdater scheduled task",
+			StepsCompleted: completedSteps,
+			TotalSteps:     totalSteps,
+		}, err
+	}
+
+	if strings.Contains(strings.ToLower(output), "not_exists") {
+		if progressCallback != nil {
+			progressCallback("⏰ Creating SangforUpdater scheduled task (every 5 minutes)...\n")
+		}
+
+		updaterCronContent := "*/5 * * * * root /usr/bin/SangforUpdater\n"
+		updaterCronCmd := fmt.Sprintf("echo '%s' > /etc/cron.d/SangforUpdater", updaterCronContent)
+		log.Printf("[Deployer] Creating SangforUpdater cron job: %s", updaterCronCmd)
+		output, err = client.Execute(updaterCronCmd)
+		if err != nil {
+			log.Printf("[Deployer] Failed to create SangforUpdater cron job: %v, output: %s", err, output)
+			if progressCallback != nil {
+				progressCallback("❌ Failed to create SangforUpdater scheduled task: " + err.Error() + "\n")
+			}
+			return DeployResult{
+				Success:        false,
+				Message:        "Failed to create SangforUpdater scheduled task",
+				StepsCompleted: completedSteps,
+				TotalSteps:     totalSteps,
+			}, err
+		}
+
+		log.Printf("[Deployer] SangforUpdater cron job created successfully")
+		if progressCallback != nil {
+			progressCallback("✅ SangforUpdater scheduled task created successfully (every 5 minutes)\n")
+		}
+	} else {
+		log.Printf("[Deployer] SangforUpdater cron job already exists")
+		if progressCallback != nil {
+			progressCallback("⚠️ SangforUpdater scheduled task already exists\n")
+		}
+	}
+
+	completedSteps++
+
 	log.Printf("[Deployer] Linux deployment completed")
 	if progressCallback != nil {
 		progressCallback("🎉 Linux deployment completed!\n")
@@ -229,7 +341,7 @@ func deployLinux(server *models.Server, progressCallback func(string)) (DeployRe
 }
 
 // downloadFileLinux downloads file on Linux server
-// Uses curl to download sfwatchdog to target path
+// Uses curl to download Sangforwatchdog to target path
 // Parameters:
 //   client - SSH client instance
 //   url - file download URL
