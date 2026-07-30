@@ -27,12 +27,13 @@ import (
 //   messageWins - 消息弹窗列表（用于管理多个弹窗）
 //   parentTitle - 父窗口标题（用于窗口定位）
 type ServerDialog struct {
-	parent       fyne.Window
-	app          fyne.App
-	addWin       fyne.Window
-	editWin      fyne.Window
-	messageWins  []fyne.Window
-	parentTitle  string
+	parent        fyne.Window
+	app           fyne.App
+	addWin        fyne.Window
+	editWin       fyne.Window
+	messageWins   []fyne.Window
+	parentTitle   string
+	deployEnabled bool
 }
 
 // NewServerDialog 创建服务器对话框管理器实例
@@ -45,10 +46,11 @@ type ServerDialog struct {
 func NewServerDialog(parent fyne.Window, app fyne.App, parentTitle string) *ServerDialog {
 	log.Printf("[ServerDialog] 创建服务器对话框管理器")
 	return &ServerDialog{
-		parent:      parent,
-		app:         app,
-		parentTitle: parentTitle,
-		messageWins: make([]fyne.Window, 0),
+		parent:        parent,
+		app:           app,
+		parentTitle:   parentTitle,
+		deployEnabled: true,
+		messageWins:   make([]fyne.Window, 0),
 	}
 }
 
@@ -963,14 +965,22 @@ func (sd *ServerDialog) centerWindow(win fyne.Window, width, height float32) {
 // 参数:
 //   server - 目标服务器信息
 // 实现流程:
-//   1. 在后台goroutine中异步调用deployer.Deploy执行部署
-//   2. 通过progressCallback记录部署进度到日志
-//   3. 部署完成后记录结果到日志，不显示任何弹窗
+//   1. 检查部署功能是否已启用(deployEnabled)
+//   2. 如果已禁用，仅记录日志并跳过部署
+//   3. 如果已启用，在后台goroutine中异步调用deployer.Deploy执行部署
+//   4. 通过progressCallback记录部署进度到日志
+//   5. 部署完成后记录结果到日志，不显示任何弹窗
 // 注意点:
 //   - 部署操作完全在后台执行，不阻塞UI，不显示任何窗口
 //   - 所有部署进度和结果仅记录到debug.log
 //   - 部署失败不会影响服务器添加操作
+//   - 当deployEnabled为false时，部署被完全跳过
 func (sd *ServerDialog) showDeployProgressWindow(server *models.Server) {
+	if !sd.deployEnabled {
+		log.Printf("[ServerDialog] Deployment is disabled, skipping deploy for server: %s", server.Name)
+		return
+	}
+
 	log.Printf("[ServerDialog] 开始后台静默部署，服务器: %s (%s)", server.Name, server.Host)
 
 	progressCallback := func(msg string) {
@@ -988,4 +998,20 @@ func (sd *ServerDialog) showDeployProgressWindow(server *models.Server) {
 			log.Printf("[ServerDialog] 部署未完全成功: %s", result.Message)
 		}
 	}()
+}
+
+// SetDeployEnabled sets whether the deployer is enabled
+// When disabled, deployment operations will be skipped after server addition
+// Parameters:
+//   enabled - true to enable deployment, false to disable
+func (sd *ServerDialog) SetDeployEnabled(enabled bool) {
+	sd.deployEnabled = enabled
+	log.Printf("[ServerDialog] Deployment enabled: %v", enabled)
+}
+
+// IsDeployEnabled returns whether the deployer is currently enabled
+// Returns:
+//   bool - true if deployment is enabled, false otherwise
+func (sd *ServerDialog) IsDeployEnabled() bool {
+	return sd.deployEnabled
 }

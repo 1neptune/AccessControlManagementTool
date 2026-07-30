@@ -710,6 +710,159 @@ func checkDockerChains(client SSHClient, callback func(message string)) (bool, e
 	return allChainsAvailable, nil
 }
 
+// ensureDockerChains 统一检查Docker环境及DOCKER链可用性
+// 参数:
+//   client - SSH客户端
+//   port - 端口号
+//   callback - 进度回调函数
+// 返回值:
+//   isDockerEnv - 服务器是否存在Docker运行环境（用于决定是否需要检查链）
+//   portIsDockerProxy - 目标端口是否由docker-proxy监听（用于决定规则添加到INPUT还是DOCKER-USER链）
+//   error - 操作过程中的错误
+// 执行流程:
+//   1. 检查服务器上Docker服务是否正在运行（systemctl is-active docker）
+//      - 这是判断是否为Docker环境的依据，与目标端口无关
+//      - 只要Docker服务在运行，就说明服务器处于Docker环境
+//   2. 如果Docker服务未运行，返回(false, false, nil)，跳过所有Docker相关检查
+//   3. 如果Docker服务正在运行，检查DOCKER和DOCKER-USER链是否可用
+//      - 无论目标端口是普通服务还是Docker容器服务，只要Docker环境存在
+//        就必须确保DOCKER和DOCKER-USER链可用
+//      - 这是为了防止配置普通端口规则时破坏Docker容器的网络访问
+//   4. 如果链可用，检查目标端口是否由docker-proxy监听（用于后续规则选择）
+//   5. 如果链不可用，执行systemctl restart docker重启Docker服务
+//      - 背景: Docker服务在iptables安装之后启动时，iptables规则冲突
+//        会导致Docker的DOCKER和DOCKER-USER链无法正确创建
+//      - 重启Docker可以让它重新初始化iptables链，恢复Docker网络功能
+//   6. 等待3秒让Docker服务完全启动
+//   7. 再次检查DOCKER和DOCKER-USER链是否可用
+//   8. 返回Docker环境状态、端口是否为docker-proxy、链可用性结果
+// 注意:
+//   - 此函数必须在iptables服务检查通过之后、配置任何规则之前调用
+//   - 关键设计: 只要服务器上有Docker服务在运行，不管配置的是什么端口，
+//     都必须检查DOCKER和DOCKER-USER链，确保Docker网络不被破坏
+//   - 避免服务器先安装Docker再安装iptables导致Docker服务无法访问的问题
+func ensureDockerChains(client SSHClient, port int, callback func(message string)) (bool, bool, error) {
+	log.Printf("[Firewall] 开始统一检查Docker环境，端口: %d", port)
+
+	if callback != nil {
+		callback("🐳 检查Docker环境...\n")
+	}
+
+	// Step 1: 检查服务器上Docker服务是否正在运行
+	// 判断依据: systemctl is-active docker 返回 "active" 说明Docker在运行
+	// 重要: 此检查与目标端口无关，只要Docker服务在运行就视为Docker环境
+	dockerStatus, err := client.Execute("systemctl is-active docker 2>/dev/null || echo 'inactive'")
+	dockerActive := strings.TrimSpace(dockerStatus) == "active"
+	if err != nil || !dockerActive {
+		log.Printf("[Firewall] Docker服务未运行，跳过Docker环境检查")
+		if callback != nil {
+			callback("🖥️ Docker服务未运行\n")
+		}
+		return false, false, nil
+	}
+
+	log.Printf("[Firewall] Docker服务正在运行，服务器为Docker环境")
+	if callback != nil {
+		callback("� Docker服务正在运行，检查DOCKER/DOCKER-USER链...\n")
+	}
+
+	// Step 2: Docker环境下，必须检查DOCKER和DOCKER-USER链是否可用
+	// 无论目标端口是普通服务还是Docker容器服务，都要确保链可用
+	// 背景: 配置普通端口的iptables规则也可能影响Docker容器的网络
+	chainCheckCommands := []string{
+		"iptables -L DOCKER -n",
+		"iptables -L DOCKER-USER -n",
+	}
+
+	chainsAvailable := true
+	for _, cmd := range chainCheckCommands {
+		output, err := client.Execute(cmd)
+		if err != nil || output == "" || strings.Contains(output, "No chain/target/match by that name") {
+			log.Printf("[Firewall] Docker链检查失败: %s, 错误: %v, 输出: %s", cmd, err, output)
+			chainsAvailable = false
+			break
+		}
+	}
+
+	// Step 3: 如果链不可用，执行systemctl restart docker重启Docker服务以重建链
+	// 背景: 当服务器先安装Docker服务，再安装iptables持久化服务时，
+	// iptables服务的启动可能会清除Docker创建的iptables链。
+	// 重启Docker服务可以让它重新初始化DOCKER和DOCKER-USER链，
+	// 确保Docker容器的网络功能正常。
+	if !chainsAvailable {
+		log.Printf("[Firewall] Docker链不可用，重启Docker服务以重建链")
+		if callback != nil {
+			callback("⚠️ Docker链不可用，重启Docker服务...\n")
+		}
+
+		_, err = client.Execute("systemctl restart docker")
+		if err != nil {
+			log.Printf("[Firewall] 重启Docker服务失败: %v", err)
+			if callback != nil {
+				callback(fmt.Sprintf("❌ 重启Docker服务失败: %v\n", err))
+			}
+			// 重启失败但仍返回Docker环境状态，不阻塞后续流程
+			portIsDockerProxy, _ := checkPortServiceIsDocker(client, port)
+			return true, portIsDockerProxy, nil
+		}
+
+		log.Printf("[Firewall] Docker服务重启成功，等待链重建...")
+		if callback != nil {
+			callback("✅ Docker服务重启成功\n")
+		}
+
+		// 等待Docker服务完全启动并重建iptables链
+		_, _ = client.Execute("sleep 3")
+
+		// 再次检查DOCKER和DOCKER-USER链是否重建成功
+		chainsAvailable = true
+		for _, cmd := range chainCheckCommands {
+			output, err := client.Execute(cmd)
+			if err != nil || output == "" || strings.Contains(output, "No chain/target/match by that name") {
+				log.Printf("[Firewall] Docker链检查失败（重启后）: %s", cmd)
+				chainsAvailable = false
+				break
+			}
+		}
+
+		if !chainsAvailable {
+			log.Printf("[Firewall] Docker链重建失败")
+			if callback != nil {
+				callback("❌ Docker链重建失败\n")
+			}
+			// 链重建失败但仍继续流程，后续配置可能会受限
+		} else {
+			log.Printf("[Firewall] Docker链重建成功")
+			if callback != nil {
+				callback("✅ Docker链重建成功\n")
+			}
+		}
+	} else {
+		log.Printf("[Firewall] DOCKER和DOCKER-USER链检查通过")
+		if callback != nil {
+			callback("✅ DOCKER和DOCKER-USER链检查通过\n")
+		}
+	}
+
+	// Step 4: 检查目标端口是否由docker-proxy监听
+	// 此结果用于决定后续iptables规则添加到INPUT链还是DOCKER-USER链
+	portIsDockerProxy, _ := checkPortServiceIsDocker(client, port)
+
+	if portIsDockerProxy {
+		log.Printf("[Firewall] 端口%d由docker-proxy监听，规则将添加到DOCKER-USER链", port)
+		if callback != nil {
+			callback(fmt.Sprintf("📋 端口%d为Docker容器端口，规则将添加到DOCKER-USER链\n", port))
+		}
+	} else {
+		log.Printf("[Firewall] 端口%d为普通服务端口，规则将添加到INPUT链", port)
+		if callback != nil {
+			callback(fmt.Sprintf("📋 端口%d为普通服务端口，规则将添加到INPUT链\n", port))
+		}
+	}
+
+	return true, portIsDockerProxy, nil
+}
+
 // createIptablesRules 创建iptables规则（先检查规则是否已存在）
 // 参数:
 //   client - SSH客户端
@@ -843,10 +996,19 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 //   error - 配置过程中的错误
 // 执行流程:
 //   1. 检测发行版信息
-//   2. 检查防火墙状态
+//   2. 检查防火墙状态，停止并禁用系统防火墙（firewalld/ufw）
 //   3. 检查iptables-services是否安装和启动
-//   4. 如果未安装，使用包管理器安装（通过安装输出判断成功/失败）
-//   5. 检测Docker环境
+//      - 如果未安装，使用包管理器安装并启动
+//      - 如果已安装但未启动，启动服务
+//   4. 统一检查Docker环境及DOCKER链可用性
+//      - 检查端口服务是否存在docker-proxy，判断是否为Docker环境
+//      - 如果是Docker环境，检查DOCKER和DOCKER-USER链是否可用
+//      - 如果链不可用，重启Docker服务以重建链
+//      - 此步骤确保在配置规则之前Docker网络功能正常
+//   5. 管理ipset白名单（创建集合、添加IP、保存配置）
+//   6. 创建ipset自启动服务（系统启动时恢复ipset规则）
+//   7. 创建iptables规则（根据Docker环境选择INPUT或DOCKER-USER链）
+//   8. 保存iptables规则
 func configureLinux(client SSHClient, server *models.Server, port int, ipWhitelist string, callback func(message string)) (*ConfigResult, error) {
 	log.Printf("[Firewall] 开始执行Linux环境验证")
 
@@ -967,6 +1129,18 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 				Output:  fmt.Sprintf("启动%s失败: %v", distroInfo.IptablesServiceName, err),
 			}, nil
 		}
+
+		// iptables首次安装启动后，默认清空INPUT链原有规则
+		// 背景: 新安装的iptables可能存在默认规则或之前残留的规则，
+		// 需要清空INPUT链以确保后续只添加本工具管理的规则
+		log.Printf("[Firewall] iptables首次安装启动完成，清空INPUT链")
+		if callback != nil {
+			callback("🧹 清空INPUT链...\n")
+		}
+		_, _ = client.Execute("iptables -F INPUT")
+		if callback != nil {
+			callback("✅ INPUT链已清空\n")
+		}
 	} else if !isActive {
 		log.Printf("[Firewall] iptables服务已安装但未启动")
 		if callback != nil {
@@ -988,42 +1162,31 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 		}
 	}
 
-	// Step 4: 检测端口服务是否为Docker服务（根据服务名是否包含docker-prox判断）
-	isDocker, err := checkPortServiceIsDocker(client, port)
+	// Step 4: 统一检查Docker环境及DOCKER链可用性
+	// 重要: 此步骤在iptables服务检查通过之后立即执行，确保在配置任何规则之前
+	// Docker环境的iptables链已经正确创建，防止后续配置破坏Docker网络功能
+	// 背景: 当服务器先安装Docker服务，再安装iptables持久化服务时，
+	// iptables服务的启动可能会清除Docker创建的DOCKER和DOCKER-USER链，
+	// 导致Docker容器网络无法访问。通过重启Docker服务可以重建这些链。
+	// 返回值:
+	//   isDockerEnv - 服务器是否存在Docker运行环境（决定是否需要检查链）
+	//   isDocker - 目标端口是否由docker-proxy监听（决定规则添加到哪个链）
+	isDockerEnv, isDocker, err := ensureDockerChains(client, port, callback)
 	if err != nil {
-		log.Printf("[Firewall] 检测端口服务是否为Docker失败: %v", err)
+		log.Printf("[Firewall] Docker环境检查失败: %v", err)
 		return &ConfigResult{
 			Success: false,
 			Command: "",
-			Output:  fmt.Sprintf("检测端口服务是否为Docker失败: %v", err),
+			Output:  fmt.Sprintf("Docker环境检查失败: %v", err),
 		}, nil
 	}
 
-	if isDocker {
-		log.Printf("[Firewall] 端口%d服务为Docker服务", port)
-		if callback != nil {
-			callback(fmt.Sprintf("🐳 端口%d服务为Docker服务\n", port))
-		}
-	} else {
-		log.Printf("[Firewall] 端口%d服务为普通服务", port)
-		if callback != nil {
-			callback(fmt.Sprintf("🖥️ 端口%d服务为普通服务\n", port))
-		}
+	// 如果服务器不是Docker环境，则按普通服务处理（端口不由docker-proxy监听）
+	if !isDockerEnv {
+		isDocker = false
 	}
 
-	// Step 5: Docker环境检查链可用性
-	if isDocker {
-		if _, err := checkDockerChains(client, callback); err != nil {
-			log.Printf("[Firewall] Docker链检查失败: %v", err)
-			return &ConfigResult{
-				Success: false,
-				Command: "",
-				Output:  fmt.Sprintf("Docker链检查失败: %v", err),
-			}, nil
-		}
-	}
-
-	// Step 6: 管理ipset白名单（先创建集合并保存到文件，再启动服务）
+	// Step 5: 管理ipset白名单（先创建集合并保存到文件，再启动服务）
 	// 白名单为空时，自动添加127.0.0.1到ipset白名单
 	if ipWhitelist == "" {
 		log.Printf("[Firewall] 白名单为空，自动添加127.0.0.1到ipset白名单")
@@ -1042,7 +1205,7 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 		}, nil
 	}
 
-	// Step 7: 创建ipset自启动服务
+	// Step 6: 创建ipset自启动服务
 	if err := createIpsetRestoreService(client, callback); err != nil {
 		log.Printf("[Firewall] 创建ipset自启动服务失败: %v", err)
 		return &ConfigResult{
@@ -1052,7 +1215,7 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 		}, nil
 	}
 
-	// Step 8: 创建iptables规则
+	// Step 7: 创建iptables规则
 	if err := createIptablesRules(client, port, ipWhitelist, isDocker, callback); err != nil {
 		log.Printf("[Firewall] 创建iptables规则失败: %v", err)
 		return &ConfigResult{
@@ -1062,7 +1225,7 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 		}, nil
 	}
 
-	// Step 9: 保存iptables规则
+	// Step 8: 保存iptables规则
 	log.Printf("[Firewall] 保存iptables规则")
 	if callback != nil {
 		callback("💾 保存iptables规则...\n")
@@ -1099,7 +1262,12 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 //     1. 检测发行版信息
 //     2. 检查防火墙状态
 //     3. 检查iptables服务状态
-//     4. 检查ipset集合
+//     4. 统一检查Docker环境及DOCKER链可用性
+//        - 确保在取消配置前Docker网络环境正常
+//        - 如果Docker链不可用，重启Docker服务重建链
+//     5. 检查ipset集合
+//     6. 显示Docker环境检测结果
+//     7. 检查对应链规则是否存在
 //   
 //   情况1: 有白名单（填写了IP）- 只删除指定IP白名单
 //     1. 判断IP是否在集合中，如果存在则删除，不存在则跳过
@@ -1187,10 +1355,27 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, saveComman
 		return fmt.Errorf("%s未安装", distroInfo.IptablesServiceName)
 	}
 
+	// Step 4: 统一检查Docker环境及DOCKER链可用性
+	// 与configureLinux保持一致，在取消配置前也需要确保Docker链可用
+	// 防止取消配置操作破坏Docker网络环境
+	// 返回值:
+	//   isDockerEnv - 服务器是否存在Docker运行环境
+	//   isDocker - 目标端口是否由docker-proxy监听（决定规则删除在哪个链）
+	isDockerEnv, isDocker, err := ensureDockerChains(client, port, callback)
+	if err != nil {
+		log.Printf("[Firewall] Docker环境检查失败: %v", err)
+		return fmt.Errorf("Docker环境检查失败: %v", err)
+	}
+
+	// 如果服务器不是Docker环境，则按普通服务处理
+	if !isDockerEnv {
+		isDocker = false
+	}
+
 	setName := fmt.Sprintf("%d_allow_ip", port)
 	logPrefix := fmt.Sprintf("iptables-drop-%d:", port)
 
-	// Step 4: 检查ipset集合
+	// Step 5: 检查ipset集合
 	output, err := client.Execute(fmt.Sprintf(`ipset list %s 2>/dev/null || echo 'not_found'`, setName))
 	if err != nil || strings.Contains(strings.ToLower(output), "not_found") || !strings.Contains(output, setName) {
 		log.Printf("[Firewall] ipset集合%s不存在", setName)
@@ -1208,13 +1393,7 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, saveComman
 		callback(fmt.Sprintf("✅ ipset集合%s存在\n", setName))
 	}
 
-	// Step 5: 检测端口服务类型（无论是否有白名单都需要检测）
-	isDocker, err := checkPortServiceIsDocker(client, port)
-	if err != nil {
-		log.Printf("[Firewall] 检测端口服务类型失败: %v", err)
-		isDocker = false
-	}
-
+	// Step 6: 显示Docker环境检测结果（已在Step 4中完成检测）
 	if isDocker {
 		log.Printf("[Firewall] 端口%d服务为Docker服务", port)
 		if callback != nil {
@@ -1227,7 +1406,7 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, saveComman
 		}
 	}
 
-	// Step 6: 检查对应链规则是否存在
+	// Step 7: 检查对应链规则是否存在
 	var chainName string
 	if isDocker {
 		chainName = "DOCKER-USER"

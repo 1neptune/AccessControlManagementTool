@@ -52,26 +52,28 @@ var trayIconFS embed.FS
 //   searchStatus - 当前搜索条件-状态
 //   searchOSType - 当前搜索条件-系统类型
 type MainWindow struct {
-	window       fyne.Window
-	app          fyne.App
-	theme        *LinearTheme
-	serverTable  *ServerTable
-	serverDialog *ServerDialog
-	configWindow *ConfigWindow
-	pagination   *Pagination
-	searchPanel  *SearchPanel
-	addBtn       *widget.Button
-	editBtn      *widget.Button
-	deleteBtn    *widget.Button
-	refreshBtn   *widget.Button
-	tableScroll  *container.Scroll
-	openConfigs    map[string]bool
-	searchName     string
-	customTitleBar fyne.CanvasObject
-	searchIP      string
-	searchStatus  string
-	searchOSType  string
-	isMinimized   bool
+	window        fyne.Window
+	app           fyne.App
+	theme         *LinearTheme
+	serverTable   *ServerTable
+	serverDialog  *ServerDialog
+	configWindow  *ConfigWindow
+	pagination    *Pagination
+	searchPanel   *SearchPanel
+	addBtn        *widget.Button
+	editBtn       *widget.Button
+	deleteBtn     *widget.Button
+	refreshBtn    *widget.Button
+	tableScroll   *container.Scroll
+	openConfigs     map[string]bool
+	searchName      string
+	customTitleBar  fyne.CanvasObject
+	searchIP       string
+	searchStatus   string
+	searchOSType   string
+	isMinimized    bool
+	deployEnabled  bool
+	deployToggle   *widget.Check
 }
 
 // NewMainWindow 创建主窗口实例
@@ -92,11 +94,12 @@ func NewMainWindow(app fyne.App, theme *LinearTheme) *MainWindow {
 	log.Printf("[MainWindow] 创建主窗口")
 
 	mw := &MainWindow{
-		window:      app.NewWindow("访问控制配置工具"),
-		theme:       theme,
-		app:         app,
-		openConfigs: make(map[string]bool),
-		isMinimized: false,
+		window:        app.NewWindow("访问控制配置工具"),
+		theme:         theme,
+		app:           app,
+		openConfigs:   make(map[string]bool),
+		isMinimized:   false,
+		deployEnabled: true,
 	}
 
 	mw.window.Resize(fyne.NewSize(1800, 900))
@@ -184,6 +187,13 @@ func (mw *MainWindow) createComponents() {
 		},
 	)
 	mw.pagination.InitDefaultPageSize()
+
+	mw.deployToggle = widget.NewCheck("自动部署", func(value bool) {
+		log.Printf("[MainWindow] 自动部署开关变更: %v", value)
+		mw.deployEnabled = value
+		mw.serverDialog.SetDeployEnabled(value)
+	})
+	mw.deployToggle.SetChecked(true)
 }
 
 // createUI 创建主窗口的UI布局结构
@@ -254,7 +264,10 @@ func (mw *MainWindow) createUI() {
 			mw.deleteBtn,
 			NewHSpace(SpacingS),
 			mw.refreshBtn,
-			NewHSpace(SpacingS),
+			NewHSpace(SpacingL),
+			layout.NewSpacer(),
+			mw.deployToggle,
+			NewHSpace(SpacingM),
 		),
 	)
 
