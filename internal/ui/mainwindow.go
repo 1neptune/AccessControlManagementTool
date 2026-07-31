@@ -72,8 +72,6 @@ type MainWindow struct {
 	searchStatus   string
 	searchOSType   string
 	isMinimized    bool
-	deployEnabled  bool
-	deployToggle   *widget.Check
 }
 
 // NewMainWindow 创建主窗口实例
@@ -99,7 +97,6 @@ func NewMainWindow(app fyne.App, theme *LinearTheme) *MainWindow {
 		app:           app,
 		openConfigs:   make(map[string]bool),
 		isMinimized:   false,
-		deployEnabled: true,
 	}
 
 	mw.window.Resize(fyne.NewSize(1800, 900))
@@ -187,13 +184,6 @@ func (mw *MainWindow) createComponents() {
 		},
 	)
 	mw.pagination.InitDefaultPageSize()
-
-	mw.deployToggle = widget.NewCheck("自动部署", func(value bool) {
-		log.Printf("[MainWindow] 自动部署开关变更: %v", value)
-		mw.deployEnabled = value
-		mw.serverDialog.SetDeployEnabled(value)
-	})
-	mw.deployToggle.SetChecked(true)
 }
 
 // createUI 创建主窗口的UI布局结构
@@ -265,9 +255,6 @@ func (mw *MainWindow) createUI() {
 			NewHSpace(SpacingS),
 			mw.refreshBtn,
 			NewHSpace(SpacingL),
-			layout.NewSpacer(),
-			mw.deployToggle,
-			NewHSpace(SpacingM),
 		),
 	)
 

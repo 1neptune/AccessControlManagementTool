@@ -756,14 +756,14 @@ func ensureDockerChains(client SSHClient, port int, callback func(message string
 	if err != nil || !dockerActive {
 		log.Printf("[Firewall] Docker服务未运行，跳过Docker环境检查")
 		if callback != nil {
-			callback("🖥️ Docker服务未运行\n")
+			callback("🐳 Docker服务未运行\n")
 		}
 		return false, false, nil
 	}
 
 	log.Printf("[Firewall] Docker服务正在运行，服务器为Docker环境")
 	if callback != nil {
-		callback("� Docker服务正在运行，检查DOCKER/DOCKER-USER链...\n")
+		callback("🐳 Docker服务正在运行，检查DOCKER/DOCKER-USER链...\n")
 	}
 
 	// Step 2: Docker环境下，必须检查DOCKER和DOCKER-USER链是否可用
@@ -1135,7 +1135,7 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 		// 需要清空INPUT链以确保后续只添加本工具管理的规则
 		log.Printf("[Firewall] iptables首次安装启动完成，清空INPUT链")
 		if callback != nil {
-			callback("🧹 清空INPUT链...\n")
+			callback("✅ 清空INPUT链...\n")
 		}
 		_, _ = client.Execute("iptables -F INPUT")
 		if callback != nil {
