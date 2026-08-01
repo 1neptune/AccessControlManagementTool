@@ -218,6 +218,10 @@ Cause: APIUnavailable: WGL: The driver does not appear to support OpenGL
 
 ![Linux取消访问控制](Linux取消访问控制.png)
 
+**iptables Skill 配置流程**
+
+![iptables skill 配置](iptables%20skill%20配置.png)
+
 ### 3. 编辑服务器
 
 1. 选择要编辑的服务器
