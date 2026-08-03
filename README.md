@@ -202,6 +202,10 @@ Cause: APIUnavailable: WGL: The driver does not appear to support OpenGL
 
 ![Windows取消访问控制](Windows取消访问控制.png)
 
+**IPsec Skill 配置流程**
+
+![ipsec skill 配置](ipsec%20skill%20配置.png)
+
 #### Linux系统配置
 
 **配置访问控制**
