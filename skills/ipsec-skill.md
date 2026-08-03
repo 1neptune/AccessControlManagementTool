@@ -1,3 +1,14 @@
+---
+
+name: windows-ipsec-access-control
+description: Windows 服务器 IPsec 端口访问控制技能，基于 netsh ipsec static 命令体系，支持白名单管理、策略自动化部署、中英文系统兼容
+allowed-tools: PowerShell, netsh, sc, net, findstr, select-string
+version: 1.0.0
+author: security-team
+tags: [windows, ipsec, firewall, access-control, security, netsh]
+
+---
+
 # IPsec Skill - Windows 防火墙访问控制
 
 ---
@@ -31,11 +42,11 @@
 
 ## 常量定义
 
-| 名称 | 值 | 说明 |
-|------|-----|------|
-| 策略名称 | `安全访问控制策略` | IPsec 策略名称 |
-| 允许操作 | `允许访问` | 允许筛选器操作名称（action=permit） |
-| 拒绝操作 | `拒绝访问` | 拒绝筛选器操作名称（action=block） |
+| 名称   | 值          | 说明                       |
+| ---- | ---------- | ------------------------ |
+| 策略名称 | `安全访问控制策略` | IPsec 策略名称               |
+| 允许操作 | `允许访问`     | 允许筛选器操作名称（action=permit） |
+| 拒绝操作 | `拒绝访问`     | 拒绝筛选器操作名称（action=block）  |
 
 ---
 
@@ -279,19 +290,19 @@ Step 3: 检查策略是否存在
 
 所有 `show` 命令的输出解析都使用正则匹配中英文两种格式：
 
-| 中文格式 | 英文格式 |
-|---------|---------|
-| `名称: xxx` | `Name = xxx` |
-| `已分配: 是` | `Assigned = YES` |
-| `源 IP 地址: xxx` | `Source Address: xxx` |
-| `协议: TCP` | `Protocol: TCP` |
-| `目标端口: xxx` | `Destination Port: xxx` |
+| 中文格式           | 英文格式                    |
+| -------------- | ----------------------- |
+| `名称: xxx`      | `Name = xxx`            |
+| `已分配: 是`       | `Assigned = YES`        |
+| `源 IP 地址: xxx` | `Source Address: xxx`   |
+| `协议: TCP`      | `Protocol: TCP`         |
+| `目标端口: xxx`    | `Destination Port: xxx` |
 
 协议标准化：
 
-| 原始值 | 标准化结果 |
-|--------|-----------|
-| `6` / `TCP` / `传输控制协议` | `TCP` |
+| 原始值                      | 标准化结果 |
+| ------------------------ | ----- |
+| `6` / `TCP` / `传输控制协议`   | `TCP` |
 | `17` / `UDP` / `用户数据报协议` | `UDP` |
 
 ---

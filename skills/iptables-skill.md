@@ -1,3 +1,14 @@
+---
+
+name: iptables-access-control
+description: Linux 服务器 iptables + ipset 端口访问控制技能，支持白名单管理、Docker 环境适配、规则持久化、自动化部署
+allowed-tools: Bash, iptables, ipset, systemctl, docker, ss, grep, awk, sed
+version: 2.0.0
+author: security-team
+tags: [linux, firewall, iptables, ipset, docker, security, access-control]
+
+---
+
 # iptables Skill - Linux 防火墙访问控制
 
 ---
@@ -239,10 +250,10 @@ Step 4: 统一检查Docker环境（同配置）
 
 ## 发行版映射表
 
-| 发行版 | 包管理器 | 防火墙 | iptables包 | 保存命令 |
-|--------|---------|--------|-----------|---------|
-| Ubuntu/Kali | apt | ufw | iptables-persistent | netfilter-persistent save |
-| CentOS/RHEL/Rocky/其他 | yum | firewalld | iptables-services | service iptables save |
+| 发行版                  | 包管理器 | 防火墙       | iptables包           | 保存命令                      |
+| -------------------- | ---- | --------- | ------------------- | ------------------------- |
+| Ubuntu/Kali          | apt  | ufw       | iptables-persistent | netfilter-persistent save |
+| CentOS/RHEL/Rocky/其他 | yum  | firewalld | iptables-services   | service iptables save     |
 
 ---
 
