@@ -337,12 +337,13 @@ func (c *Client) Execute(command string) (string, error) {
 	cmdWithOutput := fmt.Sprintf(`cmd.exe /c "(%s) > %s 2>&1"`, command, fullOutputPath)
 	log.Printf("[GoExec] 带输出重定向的命令: %s", cmdWithOutput)
 
-	if err := c.initWMI(); err != nil {
+	var err error
+	if err = c.initWMI(); err != nil {
 		log.Printf("[GoExec] WMI初始化失败: %v", err)
 		return "", fmt.Errorf("WMI初始化失败: %v", err)
 	}
 
-	err := c.executeViaWMI(cmdWithOutput)
+	_, err = c.executeViaWMI(cmdWithOutput)
 	if err != nil {
 		log.Printf("[GoExec] WMI执行命令失败: %v", err)
 		return "", fmt.Errorf("WMI执行命令失败: %v", err)
@@ -370,24 +371,221 @@ func (c *Client) Execute(command string) (string, error) {
 	return "", fmt.Errorf("命令执行超时，未获取到输出")
 }
 
+// ExecuteWithTimeout 在远程Windows服务器上执行命令，支持自定义超时时间
+// 与Execute方法类似，但允许设置更长的等待时间，适用于下载等耗时操作
+// 参数:
+//   command - 要执行的命令字符串（必须是PowerShell命令，格式：powershell -Command "..."）
+//   totalTimeout - 总超时时间（包括初始等待和轮询等待）
+// 返回值:
+//   string - 命令执行完整输出
+//   error - 执行过程中的错误
+// 完成检测:
+//   - 使用进程PID检测机制，检查进程是否已退出
+//   - 进程退出后读取输出文件，确保获取完整输出
+//   - 通过tasklist命令轮询检查进程状态（间隔5秒）
+// ExecuteWithTimeout 在远程Windows服务器上执行命令，支持超时控制
+// 该方法通过WMI创建cmd.exe进程执行命令，将输出重定向到临时文件，然后轮询进程状态
+// 当进程退出后，等待3秒让子进程完成写入，再读取输出文件内容
+//
+// 参数:
+//   command - 要执行的命令（通常是PowerShell命令）
+//   totalTimeout - 总超时时间，超时后尝试读取已有输出
+//
+// 返回值:
+//   string - 命令输出内容
+//   error - 执行错误
+//
+// 执行流程:
+//   1. 生成临时输出文件路径（C:\Windows\Temp\目录下）
+//   2. 构造cmd.exe命令，将输出重定向到临时文件
+//   3. 通过WMI创建进程执行命令
+//   4. 初始等待5秒让命令开始执行
+//   5. 每5秒用wmic检查进程是否存活
+//   6. 进程退出后，等待3秒让子进程完成写入，读取输出
+//   7. 超时后尝试读取已有输出作为降级方案
+func (c *Client) ExecuteWithTimeout(command string, totalTimeout time.Duration) (string, error) {
+	const pollInterval = 5 * time.Second // 轮询间隔5秒
+
+	log.Printf("[GoExec] 准备执行命令(超时%s): %s", totalTimeout, command)
+
+	// 生成唯一的临时输出文件名，避免并发执行时文件冲突
+	outputFile := generateOutputFileName()
+	outputPath := fmt.Sprintf("Temp\\%s", outputFile)         // SMB相对路径
+	fullOutputPath := fmt.Sprintf("C:\\Windows\\Temp\\%s", outputFile) // 完整路径
+
+	log.Printf("[GoExec] 输出文件: %s", fullOutputPath)
+
+	// 构造带输出重定向的命令
+	// cmd.exe /c "(命令) > 输出文件 2>&1" 将标准输出和错误输出都重定向到文件
+	cmdWithOutput := fmt.Sprintf(`cmd.exe /c "(%s) > %s 2>&1"`, command, fullOutputPath)
+	log.Printf("[GoExec] 带输出重定向的命令: %s", cmdWithOutput)
+
+	// 初始化WMI连接
+	var err error
+	if err = c.initWMI(); err != nil {
+		log.Printf("[GoExec] WMI初始化失败: %v", err)
+		return "", fmt.Errorf("WMI初始化失败: %v", err)
+	}
+
+	// 通过WMI创建进程执行命令，返回进程PID
+	pid, err := c.executeViaWMI(cmdWithOutput)
+	if err != nil {
+		log.Printf("[GoExec] WMI执行命令失败: %v", err)
+		return "", fmt.Errorf("WMI执行命令失败: %v", err)
+	}
+	log.Printf("[GoExec] 命令已启动, PID: %d", pid)
+
+	// 初始等待5秒，让命令开始执行
+	// 避免立即检查进程状态时命令还未完全启动
+	time.Sleep(5 * time.Second)
+
+	// 计算最大轮询次数 = (总超时 - 初始等待5秒) / 轮询间隔5秒
+	remainingTimeout := totalTimeout - 5*time.Second
+	if remainingTimeout <= 0 {
+		remainingTimeout = 30 * time.Second
+	}
+	maxPolls := int(remainingTimeout / pollInterval)
+	if maxPolls < 3 {
+		maxPolls = 3 // 至少轮询3次
+	}
+
+	log.Printf("[GoExec] 开始轮询进程状态，最多%d次(间隔5秒)", maxPolls)
+
+	// 轮询检查进程是否退出
+	for i := 0; i < maxPolls; i++ {
+		// 使用wmic检查进程是否存活
+		// 不使用tasklist，因为tasklist在引号嵌套时有转义问题
+		checkCmd := fmt.Sprintf("wmic process where processid=%d get processid", pid)
+		checkOutput, checkErr := c.executeViaWMIAndWait(checkCmd)
+		
+		if checkErr != nil {
+			log.Printf("[GoExec] 进程检查命令失败(第%d次): %v", i+1, checkErr)
+		} else {
+			checkOutput = strings.TrimSpace(checkOutput)
+			log.Printf("[GoExec] 进程检查结果(第%d次): PID=%d, 输出=%s", i+1, pid, checkOutput)
+			
+			// 判断进程是否已退出
+			// wmic在进程不存在时返回"No Instance(s) Available"（英文）或"没有可用实例"（中文）
+			exited := false
+			if len(checkOutput) == 0 {
+				// 输出为空，进程已退出
+				exited = true
+				log.Printf("[GoExec] 进程已退出(第%d次检查): 输出为空", i+1)
+			} else if strings.Contains(checkOutput, "No Instance") || strings.Contains(checkOutput, "没有可用实例") {
+				// wmic返回无可用实例，进程已退出
+				exited = true
+				log.Printf("[GoExec] 进程已退出(第%d次检查): 无可用实例", i+1)
+			}
+			
+			if exited {
+				log.Printf("[GoExec] 进程已退出(第%d次检查), PID: %d", i+1, pid)
+				
+				// 关键：等待3秒让子进程完成写入
+				// 因为cmd.exe启动powershell子进程后会先退出
+				// 但powershell可能还在继续写入输出文件
+				time.Sleep(3 * time.Second)
+				
+				// 读取输出文件内容
+				finalOutput, readErr := c.readRemoteFile(outputPath)
+				if readErr != nil {
+					log.Printf("[GoExec] 读取输出文件失败: %v", readErr)
+					c.deleteRemoteFile(outputPath)
+					return "", fmt.Errorf("读取输出文件失败: %v", readErr)
+				}
+				
+				finalOutput = strings.TrimSpace(finalOutput)
+				log.Printf("[GoExec] 命令执行完成, 输出长度: %d", len(finalOutput))
+				if len(finalOutput) > 2000 {
+					log.Printf("[GoExec] 输出内容(前2000字节): %s", finalOutput[:2000])
+				} else {
+					log.Printf("[GoExec] 输出内容: %s", finalOutput)
+				}
+				// 删除临时输出文件
+				c.deleteRemoteFile(outputPath)
+				return finalOutput, nil
+			}
+			
+			// 检查进程是否仍在运行
+			// wmic输出格式: "ProcessId  \n<PID>" 或多行
+			// 检查输出中是否包含PID数字字符串
+			pidStr := fmt.Sprintf("%d", pid)
+			if strings.Contains(checkOutput, pidStr) {
+				log.Printf("[GoExec] 进程仍在运行(第%d次检查), PID: %d", i+1, pid)
+			} else {
+				log.Printf("[GoExec] 进程状态未知(第%d次检查), PID: %d, 输出=%s, 继续等待", i+1, pid, checkOutput)
+			}
+		}
+		
+		// 等待5秒后再次检查
+		time.Sleep(pollInterval)
+	}
+
+	// 轮询超时，尝试读取已有输出作为降级方案
+	// 某些命令可能执行时间较长但已有部分输出可用
+	log.Printf("[GoExec] 轮询超时(轮询%d次), 尝试读取已有输出", maxPolls)
+	output, readErr := c.readRemoteFile(outputPath)
+	c.deleteRemoteFile(outputPath)
+	if readErr == nil && len(output) > 0 {
+		output = strings.TrimSpace(output)
+		return output, nil
+	}
+	return "", fmt.Errorf("命令执行超时(%s)，进程%d仍在运行", totalTimeout, pid)
+}
+
+// executeViaWMIAndWait 通过WMI执行命令并等待结果
+// 这是一个内部辅助方法，用于执行短命令并获取输出
+// 参数:
+//   command - 要执行的命令（已包含输出重定向）
+// 返回值:
+//   string - 命令输出
+//   error - 执行错误
+func (c *Client) executeViaWMIAndWait(command string) (string, error) {
+	outputFile := generateOutputFileName()
+	outputPath := fmt.Sprintf("Temp\\%s", outputFile)
+	fullOutputPath := fmt.Sprintf("C:\\Windows\\Temp\\%s", outputFile)
+
+	cmdWithOutput := fmt.Sprintf(`cmd.exe /c "(%s) > %s 2>&1"`, command, fullOutputPath)
+
+	_, err := c.executeViaWMI(cmdWithOutput)
+	if err != nil {
+		return "", err
+	}
+
+	// 等待命令执行完成（短命令等待1-3秒）
+	time.Sleep(1500 * time.Millisecond)
+
+	for i := 0; i < 3; i++ {
+		output, readErr := c.readRemoteFile(outputPath)
+		if readErr == nil {
+			c.deleteRemoteFile(outputPath)
+			return output, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	c.deleteRemoteFile(outputPath)
+	return "", fmt.Errorf("命令执行超时")
+}
+
 // executeViaWMI 通过WMI调用Win32_Process.Create执行命令
 // 这是执行Windows命令的核心方法，使用WMI的进程创建功能
 // 参数:
 //   command - 要执行的命令（已包含输出重定向，如cmd.exe /c "ipconfig > output.txt"）
 // 返回值:
+//   uint32 - 进程PID，成功创建后返回
 //   error - 执行过程中的错误，成功返回nil
 // 实现细节:
 //   1. 创建60秒超时的上下文，处理网络延迟或慢服务器响应
 //   2. 使用gssapi安全上下文进行认证
 //   3. 构建WMI查询，调用Win32_Process.Create方法
 //   4. 验证进程创建结果（检查ProcessId和ReturnValue）
-//   5. 返回进程创建结果，不等待命令执行完成
+//   5. 返回进程PID，不等待命令执行完成
 // 注意点:
 //   - 超时时间60秒，适用于网络延迟较大的环境
 //   - 只负责创建进程，不负责等待命令完成
-//   - 返回值为0表示成功创建进程，但不代表命令执行成功
+//   - 返回值包含PID，可用于后续检查进程是否存活
 //   - 命令执行结果需要通过读取输出文件获取
-func (c *Client) executeViaWMI(command string) error {
+func (c *Client) executeViaWMI(command string) (uint32, error) {
 	log.Printf("[GoExec] 开始通过WMI执行命令")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -405,24 +603,25 @@ func (c *Client) executeViaWMI(command string) error {
 	out, err := builder.Spawn("Win32_Process").Method("Create").Values(args).Exec().Object()
 	if err != nil {
 		log.Printf("[GoExec] Win32_Process.Create执行失败: %v", err)
-		return fmt.Errorf("Win32_Process.Create执行失败: %v", err)
+		return 0, fmt.Errorf("Win32_Process.Create执行失败: %v", err)
 	}
 
 	values := out.Values()
-	if pid, ok := values["ProcessId"].(uint32); pid != 0 {
+	pid, ok := values["ProcessId"].(uint32)
+	if pid != 0 {
 		log.Printf("[GoExec] 进程创建成功, PID: %d", pid)
 	} else if !ok {
-		return fmt.Errorf("进程创建失败")
+		return 0, fmt.Errorf("进程创建失败")
 	}
 
 	if ret, ok := values["ReturnValue"].(uint32); ret != 0 {
 		log.Printf("[GoExec] 进程返回非零退出码: %d", ret)
 	} else if !ok {
-		return fmt.Errorf("无效的调用响应")
+		return 0, fmt.Errorf("无效的调用响应")
 	}
 
 	log.Printf("[GoExec] Win32_Process.Create执行成功")
-	return nil
+	return pid, nil
 }
 
 // readRemoteFile 通过SMB读取远程服务器上的文件

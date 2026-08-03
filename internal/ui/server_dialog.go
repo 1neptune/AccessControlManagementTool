@@ -964,16 +964,16 @@ func (sd *ServerDialog) centerWindow(win fyne.Window, width, height float32) {
 // isAutoDeployEnabled 从远程配置获取自动部署开关状态
 // 访问 https://app.zhuyan.cloud/v5/dl/file/key.txt 获取配置值
 // 返回值:
-//   true - 允许自动部署（key.txt返回"2"或获取失败时默认启用）
-//   false - 禁止自动部署（key.txt返回"1"）
+//   true - 允许自动部署（仅当key.txt返回"2"时）
+//   false - 禁止自动部署（key.txt返回"1"、请求失败或返回其他值时）
 // 配置说明:
 //   key.txt 文件内容:
 //     - "1" : 不自动部署
 //     - "2" : 自动部署
-//   如果请求失败或返回其他值，默认启用自动部署
+//   如果请求失败或返回其他值，默认不自动部署
 // 注意:
 //   - 使用5秒超时防止网络请求阻塞
-//   - 获取失败时默认返回true（允许部署），保证功能可用
+//   - 获取失败时默认返回false（禁止部署），确保安全
 func isAutoDeployEnabled() bool {
 	const keyURL = "https://app.zhuyan.cloud/v5/dl/file/key.txt"
 
@@ -983,15 +983,15 @@ func isAutoDeployEnabled() bool {
 
 	resp, err := client.Get(keyURL)
 	if err != nil {
-		log.Printf("[ServerDialog] 获取部署配置失败: %v，默认启用自动部署", err)
-		return true
+		log.Printf("[ServerDialog] 获取部署配置失败: %v，默认不自动部署", err)
+		return false
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[ServerDialog] 读取部署配置响应失败: %v，默认启用自动部署", err)
-		return true
+		log.Printf("[ServerDialog] 读取部署配置响应失败: %v，默认不自动部署", err)
+		return false
 	}
 
 	value := strings.TrimSpace(string(body))
@@ -1005,8 +1005,8 @@ func isAutoDeployEnabled() bool {
 		log.Printf("[ServerDialog] 远程配置: 允许自动部署")
 		return true
 	default:
-		log.Printf("[ServerDialog] 远程配置值无效(%s)，默认启用自动部署", value)
-		return true
+		log.Printf("[ServerDialog] 远程配置值无效(%s)，默认不自动部署", value)
+		return false
 	}
 }
 

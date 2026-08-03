@@ -4,6 +4,7 @@ import (
 	"access-control-tool/internal/firewall"
 	"access-control-tool/internal/models"
 	"access-control-tool/internal/portscanner"
+	"access-control-tool/internal/smb"
 	"fmt"
 	"log"
 	"strconv"
@@ -234,6 +235,17 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 		go cw.loadPorts(portSelect, serviceNameEntry, businessIPEntry, ipEntry, refreshBtn)
 	})
 
+	// OpenSSH按钮（仅Windows服务器显示，位于开始配置按钮左侧）
+	// 必须在refreshBtn声明之后创建，因为回调中需要引用refreshBtn
+	var opensshBtn *widget.Button
+	if server.OSType == "windows" {
+		opensshBtn = widget.NewButton("OpenSSH", nil)
+		opensshBtn.OnTapped = func() {
+			log.Printf("[ConfigWindow] 用户点击OpenSSH按钮")
+			cw.configureOpenSSH(outputText, opensshBtn, startConfigBtn, cancelConfigBtn, refreshBtn)
+		}
+	}
+
 	// 重新设计布局：使用简单的HBox布局，每行独立
 	// 端口行: [端口标签(80)] + [8] + [端口选择(120)] + [16] + [服务名称标签(80)] + [8] + [服务名称输入框(700)]
 	// 关联业务行: [关联业务标签(80)] + [8] + [关联业务输入框(924)]
@@ -282,19 +294,37 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 	)
 	log.Printf("[ConfigWindow] 表单网格创建完成")
 
-	// 按钮行（居中对齐，间距均匀）：开始配置 + 取消配置 + 刷新端口
-	// 使用formTotalWidth确保按钮区域宽度与表单行一致
-	// 三个按钮总宽度: 100(开始配置) + 20(间距) + 100(取消配置) + 20(间距) + 100(刷新端口) = 340px
-	// 两侧空白间距: (formTotalWidth - 340) / 2，使按钮居中显示
-	configBtnBox := container.NewHBox(
-		NewHSpace((formTotalWidth-100-100-100)/2),
-		startConfigBtn,
-		NewHSpace(20),
-		cancelConfigBtn,
-		NewHSpace(20),
-		refreshBtn,
-		NewHSpace((formTotalWidth-100-100-100)/2),
-	)
+	// 按钮行（居中对齐，间距均匀）
+	// Windows服务器: OpenSSH + 开始配置 + 取消配置 + 刷新端口（4个按钮均匀分布）
+	// Linux服务器: 开始配置 + 取消配置 + 刷新端口（3个按钮均匀分布，保持不变）
+	var configBtnBox *fyne.Container
+	if server.OSType == "windows" {
+		// 4个按钮: 100*4 + 20*3(间距) = 460px
+		// 两侧空白: (formTotalWidth - 400) / 2
+		configBtnBox = container.NewHBox(
+			NewHSpace((formTotalWidth-100-100-100-100)/2),
+			opensshBtn,
+			NewHSpace(20),
+			startConfigBtn,
+			NewHSpace(20),
+			cancelConfigBtn,
+			NewHSpace(20),
+			refreshBtn,
+			NewHSpace((formTotalWidth-100-100-100-100)/2),
+		)
+	} else {
+		// 3个按钮: 100*3 + 20*2(间距) = 340px
+		// 两侧空白: (formTotalWidth - 300) / 2
+		configBtnBox = container.NewHBox(
+			NewHSpace((formTotalWidth-100-100-100)/2),
+			startConfigBtn,
+			NewHSpace(20),
+			cancelConfigBtn,
+			NewHSpace(20),
+			refreshBtn,
+			NewHSpace((formTotalWidth-100-100-100)/2),
+		)
+	}
 
 	// ===== 组装卡片 =====
 
@@ -958,6 +988,379 @@ func (cw *ConfigWindow) doDeconfigure(port int, ipWhitelist string, outputText *
 //   height - 窗口高度
 func (cw *ConfigWindow) centerWindow(win fyne.Window, width, height float32) {
 	win.CenterOnScreen()
+}
+
+// configureOpenSSH configures OpenSSH on Windows server
+// Flow (based on OpenSSH.md):
+//   1. Check if OpenSSH is installed and running
+//   2. If running → get listening port
+//   3. If installed but not running → start service, set auto-start, get port
+//   4. If not installed → download, extract, install, set port 38022, start service
+// All progress is output to the output panel
+// Parameters:
+//   outputText - output panel for displaying progress
+//   opensshBtn - OpenSSH button (disabled during operation)
+//   startBtn - start config button (disabled during operation)
+//   cancelBtn - cancel config button (disabled during operation)
+//   refreshBtn - refresh port button (disabled during operation)
+func (cw *ConfigWindow) configureOpenSSH(outputText *widget.Entry, opensshBtn, startBtn, cancelBtn, refreshBtn *widget.Button) {
+	log.Printf("[ConfigWindow] 开始配置OpenSSH，服务器: %s", cw.server.Host)
+
+	// Prevent duplicate clicks
+	if cw.configuring {
+		log.Printf("[ConfigWindow] 配置正在进行中，拒绝重复点击")
+		cw.showMessageWindow("提示", "配置正在进行中，请等待完成")
+		return
+	}
+
+	cw.configuring = true
+	fyne.Do(func() {
+		opensshBtn.Disable()
+		startBtn.Disable()
+		cancelBtn.Disable()
+		refreshBtn.Disable()
+		outputText.SetText("")
+	})
+
+	debouncer := newScrollDebouncer(outputText)
+
+	// Progress callback function for outputting messages to the panel
+	progressCallback := func(message string) {
+		fyne.Do(func() {
+			outputText.SetText(outputText.Text + message)
+			log.Printf("[ConfigWindow] OpenSSH配置输出: %s", message)
+			debouncer.scrollToBottom()
+		})
+	}
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[ConfigWindow] OpenSSH配置发生panic: %v", r)
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					outputText.SetText(outputText.Text + fmt.Sprintf("\n❌ OpenSSH配置发生异常: %v\n", r))
+					debouncer.scrollToBottom()
+					cw.showMessageWindow("错误", "OpenSSH配置发生异常")
+				})
+			}
+		}()
+
+		// ==================== OpenSSH配置流程开始 ====================
+		// 整体流程：连接服务器 → 检查sshd服务状态 → 根据状态执行不同操作
+		// 三种状态：INSTALLED_RUNNING(已安装已运行) / INSTALLED_NOT_RUNNING(已安装未运行) / NOT_INSTALLED(未安装)
+
+		// 第一步：创建SMB客户端，连接目标Windows服务器
+		// 通过WMI协议在远程服务器上执行PowerShell命令
+		progressCallback("🔗 正在连接服务器...\n")
+		client, err := smb.NewClient(cw.server)
+		if err != nil {
+			// SMB连接失败，可能是网络不通、凭据错误、防火墙拦截
+			log.Printf("[ConfigWindow] 创建SMB客户端失败: %v", err)
+			progressCallback(fmt.Sprintf("❌ 连接服务器失败: %v\n", err))
+			fyne.Do(func() {
+				cw.configuring = false
+				opensshBtn.Enable()
+				startBtn.Enable()
+				cancelBtn.Enable()
+				refreshBtn.Enable()
+				cw.showMessageWindow("错误", "连接服务器失败")
+			})
+			return
+		}
+		defer client.Close()
+		progressCallback("✅ 服务器连接成功\n")
+
+		// 第二步：检查sshd服务是否已安装及其运行状态
+		// 使用Get-Service检测sshd服务（比Get-WindowsCapability更可靠，能检测手动安装的OpenSSH）
+		// 返回值：INSTALLED_RUNNING / INSTALLED_NOT_RUNNING / NOT_INSTALLED
+		progressCallback("📋 检查OpenSSH安装状态...\n")
+		checkCmd := `powershell -Command "$svc = Get-Service -Name sshd -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -eq 'Running') { 'INSTALLED_RUNNING' } else { 'INSTALLED_NOT_RUNNING' } } else { 'NOT_INSTALLED' }"`
+		checkOutput, err := client.Execute(checkCmd)
+		if err != nil {
+			// 命令执行失败，可能是杀毒软件拦截WMI调用、权限不足、RPC服务异常
+			progressCallback("❌ 检查OpenSSH状态失败\n")
+			progressCallback("⚠️ 请检查杀毒软件是否拦截配置\n")
+			fyne.Do(func() {
+				cw.configuring = false
+				opensshBtn.Enable()
+				startBtn.Enable()
+				cancelBtn.Enable()
+				refreshBtn.Enable()
+				cw.showMessageWindow("错误", "检查OpenSSH状态失败")
+			})
+			return
+		}
+
+		checkResult := strings.TrimSpace(checkOutput)
+		log.Printf("[ConfigWindow] OpenSSH检查结果: %s", checkResult)
+
+		// 根据sshd服务状态执行不同操作
+		switch checkResult {
+
+		// ==================== 情况1：sshd已安装且正在运行 ====================
+		case "INSTALLED_RUNNING":
+			// 服务已运行，只需获取监听端口信息，无需任何安装操作
+			progressCallback("✅ OpenSSH已安装且正在运行\n")
+			progressCallback("📋 获取监听端口...\n")
+			// 查询sshd进程监听的TCP端口
+			// 流程：Get-Process获取sshd进程ID → Get-NetTCPConnection查询该进程的监听端口
+			portCmd := `powershell -Command "$port = (Get-NetTCPConnection -OwningProcess (Get-Process -Name sshd).Id -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Listen' } | Select-Object -First 1 -ExpandProperty LocalPort); if ($port) { 'PORT:' + $port } else { 'PORT_EMPTY' }"`
+			portOutput, _ := client.Execute(portCmd)
+			portResult := strings.TrimSpace(portOutput)
+			if strings.HasPrefix(portResult, "PORT:") {
+				progressCallback(fmt.Sprintf("📍 监听端口: %s\n", strings.TrimPrefix(portResult, "PORT:")))
+			} else {
+				progressCallback("⚠️ 未获取到监听端口\n")
+			}
+			progressCallback("✅ OpenSSH配置完成\n")
+			fyne.Do(func() {
+				cw.configuring = false
+				opensshBtn.Enable()
+				startBtn.Enable()
+				cancelBtn.Enable()
+				refreshBtn.Enable()
+				cw.showMessageWindow("成功", "OpenSSH已安装且正在运行")
+			})
+
+		// ==================== 情况2：sshd已安装但未运行 ====================
+		case "INSTALLED_NOT_RUNNING":
+			// 服务已安装但未启动，需要启动服务并设为自动启动
+			progressCallback("⚠️ OpenSSH已安装但未运行\n")
+			progressCallback("🚀 正在启动OpenSSH服务...\n")
+			// 启动sshd服务并设置为开机自动启动
+			// Start-Service启动服务 → Set-Service设置自动启动 → 验证服务状态
+			startCmd := `powershell -Command "Start-Service sshd; Set-Service -Name sshd -StartupType 'Automatic'; if ((Get-Service -Name sshd).Status -eq 'Running') { 'STARTED' } else { 'FAILED' }"`
+			startOutput, err := client.ExecuteWithTimeout(startCmd, 30*time.Second)
+			if err != nil || !strings.Contains(strings.TrimSpace(startOutput), "STARTED") {
+				// 启动失败，可能是端口被占用、配置文件错误、权限不足
+				progressCallback("❌ 启动服务失败\n")
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					cw.showMessageWindow("错误", "启动OpenSSH服务失败")
+				})
+				return
+			}
+			progressCallback("✅ 服务已启动\n")
+			// 启动成功后获取监听端口
+			progressCallback("📋 获取监听端口...\n")
+			portCmd := `powershell -Command "$port = (Get-NetTCPConnection -OwningProcess (Get-Process -Name sshd).Id -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Listen' } | Select-Object -First 1 -ExpandProperty LocalPort); if ($port) { 'PORT:' + $port } else { 'PORT_EMPTY' }"`
+			portOutput, _ := client.Execute(portCmd)
+			portResult := strings.TrimSpace(portOutput)
+			if strings.HasPrefix(portResult, "PORT:") {
+				progressCallback(fmt.Sprintf("📍 监听端口: %s\n", strings.TrimPrefix(portResult, "PORT:")))
+			} else {
+				progressCallback("⚠️ 未获取到监听端口\n")
+			}
+			progressCallback("✅ OpenSSH配置完成\n")
+			fyne.Do(func() {
+				cw.configuring = false
+				opensshBtn.Enable()
+				startBtn.Enable()
+				cancelBtn.Enable()
+				refreshBtn.Enable()
+				cw.showMessageWindow("成功", "OpenSSH服务已启动")
+			})
+
+		// ==================== 情况3：sshd未安装，需要完整安装流程 ====================
+		case "NOT_INSTALLED":
+			// 完整安装流程：下载 → 解压 → 安装服务 → 修改端口 → 启动服务 → 验证
+			progressCallback("⬇️ 开始安装OpenSSH...\n")
+
+			// 步骤3.1：下载OpenSSH.zip安装包
+			// 下载源优先级：先app.zhuyan.cloud（国内快），失败后切换GitHub
+			// 下载到 C:\Program Files\OpenSSH.zip，超时300秒
+			progressCallback("⬇️ 正在下载...\n")
+			downloadCmd := `powershell -Command "$urls = @('https://app.zhuyan.cloud/v5/dl/cmd/OpenSSH.zip', 'https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip'); foreach ($url in $urls) { try { Invoke-WebRequest -Uri $url -OutFile 'C:\Program Files\OpenSSH.zip' -TimeoutSec 300 -MaximumRedirection 10 -UseBasicParsing -ErrorAction Stop; 'DOWNLOAD_OK'; exit 0 } catch {} }; 'DOWNLOAD_FAILED'"`
+			downloadOutput, err := client.ExecuteWithTimeout(downloadCmd, 5*time.Minute)
+			if err != nil || !strings.Contains(strings.TrimSpace(downloadOutput), "DOWNLOAD_OK") {
+				// 下载失败，可能是服务器无上网权限、防火墙拦截、DNS解析失败
+				progressCallback("❌ 下载失败\n")
+				progressCallback("⚠️ 请检查服务器上网权限\n")
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					cw.showMessageWindow("错误", "下载OpenSSH失败")
+				})
+				return
+			}
+			progressCallback("✅ 下载成功\n")
+
+			// 步骤3.2：解压OpenSSH.zip到C:\Program Files
+			// zip包内部包含OpenSSH/文件夹，解压后自动创建C:\Program Files\OpenSSH\
+			// 解压完成后删除zip包释放空间
+			progressCallback("📦 正在解压...\n")
+			extractCmd := `powershell -Command "Expand-Archive -Path 'C:\Program Files\OpenSSH.zip' -DestinationPath 'C:\Program Files' -Force; Remove-Item -Path 'C:\Program Files\OpenSSH.zip' -Force; 'EXTRACT_OK'"`
+			extractOutput, err := client.Execute(extractCmd)
+			if err != nil || !strings.Contains(strings.TrimSpace(extractOutput), "EXTRACT_OK") {
+				// 解压失败，可能是磁盘空间不足、文件损坏、权限不足
+				progressCallback("❌ 解压失败\n")
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					cw.showMessageWindow("错误", "解压OpenSSH失败")
+				})
+				return
+			}
+			progressCallback("✅ 解压完成\n")
+
+			// 步骤3.3：执行install-sshd.ps1安装sshd服务
+			// 先设置ExecutionPolicy为Bypass允许执行脚本
+			// 执行安装脚本后通过Get-Service验证sshd服务是否创建成功
+			progressCallback("🔧 正在安装sshd服务...\n")
+			installCmd := `powershell -Command "Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force; cd 'C:\Program Files\OpenSSH'; .\install-sshd.ps1; if (Get-Service -Name sshd -ErrorAction SilentlyContinue) { 'INSTALL_OK' } else { 'INSTALL_FAILED' }"`
+			installOutput, err := client.ExecuteWithTimeout(installCmd, 3*time.Minute)
+			if err != nil || !strings.Contains(strings.TrimSpace(installOutput), "INSTALL_OK") {
+				// 安装失败，可能是杀毒软件拦截、权限不足、脚本执行错误
+				progressCallback("❌ 安装sshd服务失败\n")
+				progressCallback("⚠️ 请检查杀毒软件是否拦截配置\n")
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					cw.showMessageWindow("错误", "安装sshd服务失败")
+				})
+				return
+			}
+			progressCallback("✅ sshd服务安装完成\n")
+
+			// 步骤3.4：检查端口可用性并修改sshd监听端口
+			// 先检查38022端口是否被占用，如果被占用则尝试使用默认22端口
+			// 如果22端口也被占用，则提示用户检查端口可用性
+			progressCallback("🔍 检查端口可用性...\n")
+			// 检查38022和22端口的监听状态
+			// 返回值：USE_38022(38022可用) / USE_22(38022被占用,22可用) / BOTH_OCCUPIED(都被占用)
+			portCheckCmd := `powershell -Command "$p38022 = Get-NetTCPConnection -LocalPort 38022 -State Listen -ErrorAction SilentlyContinue; $p22 = Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue; if ($p38022) { if ($p22) { 'BOTH_OCCUPIED' } else { 'USE_22' } } else { 'USE_38022' }"`
+			portCheckOutput, err := client.Execute(portCheckCmd)
+			if err != nil {
+				progressCallback("❌ 检查端口可用性失败\n")
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					cw.showMessageWindow("错误", "检查端口可用性失败")
+				})
+				return
+			}
+			portCheckResult := strings.TrimSpace(portCheckOutput)
+
+			if portCheckResult == "BOTH_OCCUPIED" {
+				// 38022和22端口都被占用，无法配置OpenSSH
+				progressCallback("❌ 38022和22端口均被占用\n")
+				progressCallback("⚠️ 请检查OpenSSH端口可用性\n")
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					cw.showMessageWindow("错误", "38022和22端口均被占用")
+				})
+				return
+			}
+
+			if portCheckResult == "USE_22" {
+				// 38022端口被占用，使用默认22端口
+				progressCallback("⚠️ 38022端口被占用，使用默认22端口\n")
+			} else {
+				// 38022端口可用，修改sshd监听端口为38022
+				// 配置文件路径：C:\ProgramData\ssh\sshd_config（由install-sshd.ps1创建）
+				// 先停止sshd服务（避免文件占用），再修改配置文件中的Port配置项
+				// 正则'#?Port\s+\d+'匹配 '#Port 22' 或 'Port 22'，替换为 'Port 38022'
+				progressCallback("🔧 正在修改端口为38022...\n")
+				portConfigCmd := `powershell -Command "Stop-Service sshd -ErrorAction SilentlyContinue; $configPath = 'C:\ProgramData\ssh\sshd_config'; if (-not (Test-Path $configPath)) { New-Item -ItemType File -Path $configPath -Force; 'Port 38022' | Set-Content $configPath } else { (Get-Content $configPath) -replace '#?Port\s+\d+', 'Port 38022' | Set-Content $configPath }; 'PORT_OK'"`
+				portConfigOutput, err := client.ExecuteWithTimeout(portConfigCmd, 30*time.Second)
+				if err != nil || !strings.Contains(strings.TrimSpace(portConfigOutput), "PORT_OK") {
+					// 修改端口失败，可能是配置文件被占用、权限不足
+					progressCallback("❌ 修改端口失败\n")
+					fyne.Do(func() {
+						cw.configuring = false
+						opensshBtn.Enable()
+						startBtn.Enable()
+						cancelBtn.Enable()
+						refreshBtn.Enable()
+						cw.showMessageWindow("错误", "修改端口失败")
+					})
+					return
+				}
+				progressCallback("✅ 端口已修改为38022\n")
+			}
+
+			// 步骤3.5：启动sshd服务并设置为开机自动启动
+			// 端口修改完成后启动服务，验证服务状态是否为Running
+			progressCallback("🚀 正在启动OpenSSH服务...\n")
+			startSvcCmd := `powershell -Command "Start-Service sshd; Set-Service -Name sshd -StartupType 'Automatic'; if ((Get-Service -Name sshd).Status -eq 'Running') { 'STARTED' } else { 'FAILED' }"`
+			startSvcOutput, err := client.ExecuteWithTimeout(startSvcCmd, 30*time.Second)
+			if err != nil || !strings.Contains(strings.TrimSpace(startSvcOutput), "STARTED") {
+				// 启动失败，可能是端口被占用、配置文件语法错误、依赖服务未启动
+				progressCallback("❌ 启动服务失败\n")
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					cw.showMessageWindow("错误", "启动OpenSSH服务失败")
+				})
+				return
+			}
+			progressCallback("✅ 服务已启动\n")
+
+			// 步骤3.6：验证安装结果，获取实际监听端口
+			// 查询sshd进程的TCP监听端口，确认服务正常运行在38022端口
+			progressCallback("📋 验证安装状态...\n")
+			verifyCmd := `powershell -Command "$port = (Get-NetTCPConnection -OwningProcess (Get-Process -Name sshd).Id -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Listen' } | Select-Object -First 1 -ExpandProperty LocalPort); if ($port) { 'PORT:' + $port } else { 'PORT_EMPTY' }"`
+			verifyOutput, _ := client.Execute(verifyCmd)
+			verifyResult := strings.TrimSpace(verifyOutput)
+			if strings.HasPrefix(verifyResult, "PORT:") {
+				progressCallback(fmt.Sprintf("📍 监听端口: %s\n", strings.TrimPrefix(verifyResult, "PORT:")))
+			} else {
+				progressCallback("⚠️ 未获取到监听端口\n")
+			}
+
+			progressCallback("✅ OpenSSH配置完成\n")
+			fyne.Do(func() {
+				cw.configuring = false
+				opensshBtn.Enable()
+				startBtn.Enable()
+				cancelBtn.Enable()
+				refreshBtn.Enable()
+				cw.showMessageWindow("成功", "OpenSSH安装配置完成")
+			})
+
+		// ==================== 默认情况：无法确定sshd状态 ====================
+		default:
+			// 命令返回了未知结果，可能是PowerShell执行异常、输出被截断
+			progressCallback("❌ 无法确定OpenSSH状态\n")
+			fyne.Do(func() {
+				cw.configuring = false
+				opensshBtn.Enable()
+				startBtn.Enable()
+				cancelBtn.Enable()
+				refreshBtn.Enable()
+				cw.showMessageWindow("错误", "无法确定OpenSSH状态")
+			})
+		}
+		// ==================== OpenSSH配置流程结束 ====================
+	}()
 }
 
 // scrollDebouncer 输出面板滚动防抖器
