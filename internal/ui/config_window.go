@@ -131,23 +131,26 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 
 	// ===== 创建表单控件 =====
 
-	// 统一输入框宽度配置（用户指定）
+	// 统一输入框宽度配置
 	// labelWidth: 标签固定宽度（80px），所有标签统一此宽度
 	// labelHeight: 标签高度，与输入框高度一致
-	// portSelectWidth: 端口选择下拉框宽度（120px）
-	// serviceInputWidth: 服务名称输入框宽度（300px），用户指定
-	// contentInputWidth: 关联业务/白名单输入框宽度（750px），用户指定
-	// formTotalWidth: 表单区域总宽度（838px），由关联业务行决定
+	// portFieldWidth: 端口下拉框和端口输入框的宽度（各120px，两者相同
+	// serviceInputWidth: 服务名称输入框宽度 = 端口输入框 × 2 = 240px
+	// contentInputWidth: 关联业务/白名单输入框宽度（750px）
+	// formTotalWidth: 表单区域总宽度（838px），所有行统一此宽度
 	//   计算公式: labelWidth(80) + 间距(8) + contentInputWidth(750) = 838px
+	// 端口行: 80 + 8 + 120(下拉) + 8 + 120(输入) + 16 + 80 + 8 + 240(服务名) = 838px？算一遍
+	//   实际: 80+8+120+8+120+16+80+8+240 = 680px，剩余158px，加大端口下拉框/输入框调整
+	//   调整为：portFieldWidth=160，serviceInputWidth=320，则 80+8+160+8+160+16+80+8+320 = 840px 近似838px OK
 	labelWidth := float32(80)
 	labelHeight := float32(InputHeight)
-	portSelectWidth := float32(120)
-	serviceInputWidth := float32(300)
+	portFieldWidth := float32(160)
+	serviceInputWidth := portFieldWidth * 2 // 服务名称输入框 = 端口输入框 × 2 = 320px
 	contentInputWidth := float32(750)
 	formTotalWidth := labelWidth + 8 + contentInputWidth
 
-	log.Printf("[ConfigWindow] 布局参数 - labelWidth=%.2f, labelHeight=%.2f, portSelectWidth=%.2f, serviceInputWidth=%.2f, contentInputWidth=%.2f, formTotalWidth=%.2f",
-		labelWidth, labelHeight, portSelectWidth, serviceInputWidth, contentInputWidth, formTotalWidth)
+	log.Printf("[ConfigWindow] 布局参数 - labelWidth=%.2f, labelHeight=%.2f, portFieldWidth=%.2f, serviceInputWidth=%.2f, contentInputWidth=%.2f, formTotalWidth=%.2f",
+		labelWidth, labelHeight, portFieldWidth, serviceInputWidth, contentInputWidth, formTotalWidth)
 
 	// 服务名称输入框（只读，由端口选择自动填充，不带滚动）
 	serviceNameEntry := widget.NewEntry()
@@ -183,15 +186,40 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 	ipField := container.NewStack(ipBorder, ipEntry)
 	log.Printf("[ConfigWindow] 自定义白名单输入框创建完成，宽度=%.2f, 高度=%.2f", contentInputWidth, InputHeight)
 
-	// 端口选择下拉框（选择后自动填充服务名称和业务IP）
-	portSelect := widget.NewSelect([]string{}, func(s string) {
-		cw.handlePortSelect(s, serviceNameEntry, businessIPEntry, ipEntry)
-	})
+	// ===== 端口控件创建 =====
+	// 端口区域由两个独立控件组成：端口下拉框 + 端口输入框
+	// - 端口下拉框(portSelect)：显示服务器扫描到的开放端口列表，供用户选择预设端口
+	// - 端口输入框(portEntry)：标 * 必填，显示下拉框选中值，也支持用户直接输入自定义端口号
+	//   配置时端口号以该输入框的值为准（非下拉框）
+	// 两者宽度相同(portFieldWidth)，布局为：[下拉框][输入框]
+
+	// 端口下拉框（widget.Select，纯选择，用于显示预设端口列表）
+	portSelect := widget.NewSelect([]string{}, nil)
 	portSelectBorder := canvas.NewRectangle(ColorBorder)
 	portSelectBorder.CornerRadius = CornerRadius
-	portSelectBorder.SetMinSize(fyne.NewSize(portSelectWidth, InputHeight))
+	portSelectBorder.SetMinSize(fyne.NewSize(portFieldWidth, InputHeight))
 	portSelectField := container.NewStack(portSelectBorder, portSelect)
-	log.Printf("[ConfigWindow] 端口选择下拉框创建完成，宽度=%.2f, 高度=%.2f", portSelectWidth, InputHeight)
+
+	// 端口输入框（widget.Entry，* 必填，可编辑）
+	// placeholder为"自定义端口"，提示用户可直接输入端口号
+	// 配置时端口号以此输入框的值为准
+	portEntry := widget.NewEntry()
+	portEntry.SetPlaceHolder("自定义端口")
+	portEntry.Resize(fyne.NewSize(portFieldWidth, InputHeight))
+	portEntryBorder := canvas.NewRectangle(ColorBorder)
+	portEntryBorder.CornerRadius = CornerRadius
+	portEntryBorder.SetMinSize(fyne.NewSize(portFieldWidth, InputHeight))
+	portEntryField := container.NewStack(portEntryBorder, portEntry)
+
+	// 下拉框选择同步逻辑：
+	// 当用户从下拉框选择端口时，自动将选中值填入端口输入框，
+	// 并触发handlePortSelect填充服务名称和关联业务IP。
+	// 这样下拉框和输入框保持同步，且配置时以输入框值为准。
+	portSelect.OnChanged = func(s string) {
+		portEntry.SetText(s)
+		cw.handlePortSelect(s, serviceNameEntry, businessIPEntry, ipEntry)
+	}
+	log.Printf("[ConfigWindow] 端口下拉框和输入框创建完成，下拉框宽度=%.2f, 输入框宽度=%.2f", portFieldWidth, portFieldWidth)
 
 	// 输出面板（多行文本框，只读）
 	// 宽度使用formTotalWidth(880px)，确保右边界与表单行对齐
@@ -210,30 +238,32 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 	// 设置按钮点击事件
 	startConfigBtn.OnTapped = func() {
 		log.Printf("[ConfigWindow] 用户点击开始配置按钮")
-		cw.configure(portSelect, ipEntry, outputText, startConfigBtn, cancelConfigBtn)
+		cw.configure(portSelect, portEntry, ipEntry, outputText, startConfigBtn, cancelConfigBtn)
 	}
 
 	cancelConfigBtn.OnTapped = func() {
 		log.Printf("[ConfigWindow] 用户点击取消配置按钮")
-		cw.deconfigure(portSelect, ipEntry, outputText, startConfigBtn, cancelConfigBtn)
+		cw.deconfigure(portSelect, portEntry, ipEntry, outputText, startConfigBtn, cancelConfigBtn)
 	}
-
 	// ===== 组装表单行 =====
 
 	// 刷新按钮（点击后重新扫描端口信息，样式与其他按钮一致）
 	var refreshBtn *widget.Button
-	refreshBtn = widget.NewButton("刷新端口", func() {
+	refreshBtn = widget.NewButton("刷新端口", nil)
+	// 刷新按钮回调：同时禁用端口下拉框和输入框，同步提示
+	refreshBtn.OnTapped = func() {
 		log.Printf("[ConfigWindow] 用户点击刷新按钮")
 		fyne.Do(func() {
 			portSelect.Disable()
+			portEntry.Disable()
 			refreshBtn.Disable()
-			portSelect.SetSelected("正在获取...")
+			portEntry.SetText("正在获取...")
 			serviceNameEntry.SetText("正在获取...")
 			businessIPEntry.SetText("正在获取...")
 			ipEntry.SetText("")
 		})
-		go cw.loadPorts(portSelect, serviceNameEntry, businessIPEntry, ipEntry, refreshBtn)
-	})
+		go cw.loadPorts(portSelect, portEntry, serviceNameEntry, businessIPEntry, ipEntry, refreshBtn)
+	}
 
 	// OpenSSH按钮（仅Windows服务器显示，位于开始配置按钮左侧）
 	// 必须在refreshBtn声明之后创建，因为回调中需要引用refreshBtn
@@ -246,21 +276,25 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 		}
 	}
 
-	// 重新设计布局：使用简单的HBox布局，每行独立
-	// 端口行: [端口标签(80)] + [8] + [端口选择(120)] + [16] + [服务名称标签(80)] + [8] + [服务名称输入框(700)]
-	// 关联业务行: [关联业务标签(80)] + [8] + [关联业务输入框(924)]
-	// 白名单行: [自定义白名单标签(80)] + [8] + [白名单输入框(924)]
-	// 
-	// contentInputWidth = portSelectWidth(120) + 间距(16) + labelWidth(80) + 间距(8) + serviceInputWidth(700) = 924px
-	// formTotalWidth = labelWidth(80) + 间距(8) + contentInputWidth(924) = 1012px
+	// 重新设计布局：使用简单的HBox布局，每行独立，各组件均匀排列
+	// 端口行: [端口标签(80)] + [8] + [端口下拉框(200)] + [16] + [服务名称标签(80)] + [8] + [服务名称输入框(446)]
+	// 关联业务行: [关联业务标签(80)] + [8] + [关联业务输入框(750)]
+	// 白名单行: [自定义白名单标签(80)] + [8] + [白名单输入框(750)]
+	// 所有行总宽度统一为 838px，端口和服务名称在同一行均匀排列
 	
 	log.Printf("[ConfigWindow] 开始组装布局...")
 	
 	// 创建端口行
+	// 端口行：端口*标签(必填) + 端口下拉框 + 端口输入框 + 服务名称标签 + 服务名称输入框
+	// 端口下拉框和端口输入框宽度相同（各160px）
+	// 服务名称输入框宽度 = 端口输入框 × 2 = 320px
+	// 端口* 标签中的 * 表示必填项
 	portRow := container.NewHBox(
-		newLabelWithAlign("端口", labelWidth, labelHeight, true),
+		newLabelWithAlign("端口*", labelWidth, labelHeight, true),
 		NewHSpace(8),
 		portSelectField,
+		NewHSpace(8),
+		portEntryField,
 		NewHSpace(16),
 		newLabelWithAlign("服务名称", labelWidth, labelHeight, true),
 		NewHSpace(8),
@@ -399,15 +433,16 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 	// 端口下拉框和输入框先显示"正在获取..."提示，同时禁用刷新按钮
 	fyne.Do(func() {
 		portSelect.Disable()
+		portEntry.Disable()
 		refreshBtn.Disable()
-		portSelect.SetSelected("正在获取...")
+		portEntry.SetText("正在获取...")
 		serviceNameEntry.SetText("正在获取...")
 		businessIPEntry.SetText("正在获取...")
 		ipEntry.SetText("")
 	})
 
 	// 异步加载端口信息
-	go cw.loadPorts(portSelect, serviceNameEntry, businessIPEntry, ipEntry, refreshBtn)
+	go cw.loadPorts(portSelect, portEntry, serviceNameEntry, businessIPEntry, ipEntry, refreshBtn)
 }
 
 // handlePortSelect 处理端口选择事件
@@ -519,24 +554,27 @@ func (cw *ConfigWindow) refreshPortInfo(port int, serviceNameEntry, businessIPEn
 // 功能:
 //   - 调用端口扫描器获取服务器开放端口列表
 //   - 将端口信息存入portInfoMap供后续使用
-//   - 更新端口选择下拉框选项（加载完成后启用下拉框和刷新按钮）
-//   - 默认选中第一个端口并自动填充相关信息
+//   - 更新端口下拉框选项和端口输入框（加载完成后启用两者和刷新按钮）
+//   - 默认选中第一个端口，通过OnChanged自动同步到端口输入框
 //   - 加载失败时显示错误提示并启用刷新按钮
 // 注意:
 //   - 在goroutine中执行，UI更新需通过fyne.Do()
 //   - 调用前应先禁用refreshBtn，加载完成后自动启用
-func (cw *ConfigWindow) loadPorts(portSelect *widget.Select, serviceNameEntry, businessIPEntry, ipEntry *widget.Entry, refreshBtn *widget.Button) {
+//   - 端口值同步链路：portSelect.SetSelected → OnChanged → portEntry.SetText
+func (cw *ConfigWindow) loadPorts(portSelect *widget.Select, portEntry *widget.Entry, serviceNameEntry, businessIPEntry, ipEntry *widget.Entry, refreshBtn *widget.Button) {
 	log.Printf("[ConfigWindow] 开始扫描服务器端口: %s:%d", cw.server.Host, cw.server.SSHPort)
 
 	// 调用端口扫描器获取端口列表
 	portInfoList, err := portscanner.ScanPorts(cw.server)
 	if err != nil {
+		// 扫描失败：启用控件，清空下拉框选项，输入框显示"获取失败"
 		log.Printf("[ConfigWindow] 端口扫描失败: %v", err)
 		fyne.Do(func() {
 			portSelect.Enable()
+			portEntry.Enable()
 			refreshBtn.Enable()
-			portSelect.SetOptions([]string{})
-			portSelect.SetSelected("获取失败")
+			portSelect.SetOptions([]string{})  // 清空下拉框选项
+			portEntry.SetText("获取失败")        // 输入框显示失败提示
 			serviceNameEntry.SetText("获取失败")
 			businessIPEntry.SetText("获取失败")
 			cw.showMessageWindow("错误", "端口扫描失败")
@@ -546,7 +584,8 @@ func (cw *ConfigWindow) loadPorts(portSelect *widget.Select, serviceNameEntry, b
 
 	log.Printf("[ConfigWindow] 端口扫描成功，发现 %d 个端口", len(portInfoList))
 
-	// 将端口信息存入映射表
+	// 将端口信息存入映射表（portInfoMap），供handlePortSelect使用
+	// key为端口号(int)，value为端口详细信息(服务名、连接IP等)
 	cw.portInfoMap = make(map[int]portscanner.PortInfo)
 	portStrings := make([]string, 0, len(portInfoList))
 	for _, info := range portInfoList {
@@ -554,17 +593,21 @@ func (cw *ConfigWindow) loadPorts(portSelect *widget.Select, serviceNameEntry, b
 		cw.portInfoMap[info.Port] = info
 	}
 
-	// 更新UI：启用端口下拉框和刷新按钮，设置端口选项并默认选中第一个
+	// 更新UI：启用端口下拉框、端口输入框和刷新按钮
+	// 设置下拉框选项，默认选中第一个端口
+	// SetSelected会触发OnChanged回调，自动将选中值同步到portEntry输入框
 	fyne.Do(func() {
 		portSelect.Enable()
+		portEntry.Enable()
 		refreshBtn.Enable()
 		portSelect.SetOptions(portStrings)
 		if len(portStrings) > 0 {
 			portSelect.SetSelected(portStrings[0])
 			log.Printf("[ConfigWindow] 默认选中端口: %s", portStrings[0])
-			cw.handlePortSelect(portStrings[0], serviceNameEntry, businessIPEntry, ipEntry)
+			// OnChanged会自动调handlePortSelect，无需再次调用
 		} else {
-			portSelect.SetSelected("无端口")
+			portSelect.Selected = "无端口"
+			portEntry.SetText("无端口")
 			serviceNameEntry.SetText("无")
 			businessIPEntry.SetText("无")
 		}
@@ -573,21 +616,22 @@ func (cw *ConfigWindow) loadPorts(portSelect *widget.Select, serviceNameEntry, b
 
 // configure 执行访问控制策略配置
 // 参数:
-//   portSelect - 端口选择下拉框
+//   portSelect - 端口下拉框（用于显示预设端口，不直接取值）
+//   portEntry - 端口输入框（* 必填，配置时端口号以此输入框的值为准）
 //   ipEntry - 自定义白名单输入框
 //   outputText - 输出面板文本框
 //   startBtn - 开始配置按钮
 //   cancelBtn - 取消配置按钮
 // 流程:
 //   1. 检查配置状态，防止重复点击
-//   2. 校验端口和白名单输入
+//   2. 校验端口输入框（非空、数字、1-65535范围）和白名单输入
 //   3. 设置配置状态，禁用按钮，清空输出面板
 //   4. 在goroutine中调用firewall.Configure()执行配置
 //   5. 配置完成后恢复按钮状态，显示结果弹窗
 // 安全:
 //   - 使用defer + recover捕获panic，确保按钮状态恢复
 //   - UI更新通过fyne.Do()确保在主线程执行
-func (cw *ConfigWindow) configure(portSelect *widget.Select, ipEntry *widget.Entry, outputText *widget.Entry, startBtn, cancelBtn *widget.Button) {
+func (cw *ConfigWindow) configure(portSelect *widget.Select, portEntry *widget.Entry, ipEntry *widget.Entry, outputText *widget.Entry, startBtn, cancelBtn *widget.Button) {
 	log.Printf("[ConfigWindow] 开始执行配置")
 
 	// 1. 检查配置状态，防止重复点击
@@ -597,17 +641,29 @@ func (cw *ConfigWindow) configure(portSelect *widget.Select, ipEntry *widget.Ent
 		return
 	}
 
-	// 2. 校验端口选择
-	if portSelect.Selected == "" {
-		log.Printf("[ConfigWindow] 未选择端口")
-		cw.showMessageWindow("错误", "请选择端口")
+	// 2. 端口校验（三项校验，任一项不符合则弹出警告弹窗并中止操作）
+	// 端口值以端口号输入框(portEntry.Text)为准，而非下拉框
+	// 校验顺序：非空 → 数字 → 端口范围(1-65535)
+	portStr := strings.TrimSpace(portEntry.Text) // 去除首尾空格
+	if portStr == "" {
+		// 校验1：输入框不能为空
+		log.Printf("[ConfigWindow] 端口输入框为空")
+		cw.showMessageWindow("警告", "端口不能为空，请从下拉列表选择或输入端口号")
 		return
 	}
 
-	port, err := strconv.Atoi(portSelect.Selected)
+	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		log.Printf("[ConfigWindow] 无效的端口号: %s", portSelect.Selected)
-		cw.showMessageWindow("错误", "无效的端口号")
+		// 校验2：必须是有效数字
+		log.Printf("[ConfigWindow] 端口不是有效数字: %s", portStr)
+		cw.showMessageWindow("警告", "端口必须是数字，请输入有效的端口号")
+		return
+	}
+
+	if port < 1 || port > 65535 {
+		// 校验3：端口号必须在1-65535范围内
+		log.Printf("[ConfigWindow] 端口号超出范围: %d", port)
+		cw.showMessageWindow("警告", "端口号必须在 1-65535 范围内")
 		return
 	}
 
@@ -775,20 +831,21 @@ func (cw *ConfigWindow) showConfirmConfigDialog(port int, ipEntry *widget.Entry,
 
 // deconfigure 执行取消访问控制策略配置
 // 参数:
-//   portSelect - 端口选择下拉框
+//   portSelect - 端口下拉框（用于显示预设端口，不直接取值）
+//   portEntry - 端口输入框（* 必填，取消配置时端口号以此输入框的值为准）
 //   ipEntry - 自定义白名单输入框
 //   outputText - 输出面板文本框
 //   startBtn - 开始配置按钮
 //   cancelBtn - 取消配置按钮
 // 流程:
 //   1. 检查配置状态，防止重复点击
-//   2. 校验端口选择
+//   2. 校验端口输入框（非空、数字、1-65535范围）
 //   3. 如果白名单为空，弹出确认对话框（完整取消）
 //   4. 如果白名单不为空，直接执行取消配置（仅删除白名单IP）
 // 注意:
 //   - 白名单为空时表示完整取消所有规则
 //   - 白名单不为空时仅删除指定IP的访问规则
-func (cw *ConfigWindow) deconfigure(portSelect *widget.Select, ipEntry *widget.Entry, outputText *widget.Entry, startBtn, cancelBtn *widget.Button) {
+func (cw *ConfigWindow) deconfigure(portSelect *widget.Select, portEntry *widget.Entry, ipEntry *widget.Entry, outputText *widget.Entry, startBtn, cancelBtn *widget.Button) {
 	log.Printf("[ConfigWindow] 开始执行取消配置")
 
 	// 1. 检查配置状态，防止重复点击
@@ -798,17 +855,29 @@ func (cw *ConfigWindow) deconfigure(portSelect *widget.Select, ipEntry *widget.E
 		return
 	}
 
-	// 2. 校验端口选择
-	if portSelect.Selected == "" {
-		log.Printf("[ConfigWindow] 未选择端口")
-		cw.showMessageWindow("错误", "请选择端口")
+	// 2. 端口校验（三项校验，任一项不符合则弹出警告弹窗并中止操作）
+	// 端口值以端口号输入框(portEntry.Text)为准，而非下拉框
+	// 校验顺序：非空 → 数字 → 端口范围(1-65535)
+	portStr := strings.TrimSpace(portEntry.Text) // 去除首尾空格
+	if portStr == "" {
+		// 校验1：输入框不能为空
+		log.Printf("[ConfigWindow] 端口输入框为空")
+		cw.showMessageWindow("警告", "端口不能为空，请从下拉列表选择或输入端口号")
 		return
 	}
 
-	port, err := strconv.Atoi(portSelect.Selected)
+	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		log.Printf("[ConfigWindow] 无效的端口号: %s", portSelect.Selected)
-		cw.showMessageWindow("错误", "无效的端口号")
+		// 校验2：必须是有效数字
+		log.Printf("[ConfigWindow] 端口不是有效数字: %s", portStr)
+		cw.showMessageWindow("警告", "端口必须是数字，请输入有效的端口号")
+		return
+	}
+
+	if port < 1 || port > 65535 {
+		// 校验3：端口号必须在1-65535范围内
+		log.Printf("[ConfigWindow] 端口号超出范围: %d", port)
+		cw.showMessageWindow("警告", "端口号必须在 1-65535 范围内")
 		return
 	}
 

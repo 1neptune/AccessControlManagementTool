@@ -12,6 +12,9 @@ import (
 // 扫描流程:
 // 1. 执行netstat -ano命令获取端口监听和连接状态
 // 2. 解析输出，提取非本地回环的监听端口和已建立连接的远程IP
+//    - 包含监听全局地址（0.0.0.0）和具体非回环IP地址（如192.168.21.239）的端口
+//    - 排除仅监听回环地址（127.0.0.1, [::1]）的端口
+//    - 端口号全局去重：同一端口在多个地址监听时仅保留一条记录
 // 3. 通过wmic process get ProcessId,Name获取进程名称映射
 // 4. 将进程名称关联到对应的端口
 // 5. 按端口号排序后返回结果
@@ -29,7 +32,10 @@ func scanWindowsPorts(client *smb.Client) ([]PortInfo, error) {
 
 	log.Printf("[PortScanner] 命令执行成功，输出长度: %d 字节", len(output))
 
+	// portMap 以端口号作为key存储端口信息，实现端口号去重
+	// 同一端口在多个地址监听（如0.0.0.0:139和192.168.21.239:139）时合并为一条记录
 	portMap := make(map[int]*PortInfo)
+	// pidToPort 记录每个PID对应的监听端口列表，用于后续查询进程名称
 	pidToPort := make(map[string][]int)
 	lines := strings.Split(output, "\n")
 	log.Printf("[PortScanner] 解析输出，共 %d 行", len(lines))
@@ -50,6 +56,8 @@ func scanWindowsPorts(client *smb.Client) ([]PortInfo, error) {
 		remoteAddr := parts[2]
 		pid := parts[4]
 
+		// 排除仅监听本地回环地址（127.0.0.1, [::1]）的端口
+		// 其他地址（包括0.0.0.0全局地址和192.168.21.239等具体非回环IP）的监听端口均保留
 		if strings.HasPrefix(localAddr, "127.0.0.1:") || strings.HasPrefix(localAddr, "[::1]:") {
 			continue
 		}

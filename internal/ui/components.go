@@ -355,3 +355,212 @@ func NewPageContainer(content fyne.CanvasObject) *fyne.Container {
 		NewVSpace(SpacingM),
 	)
 }
+
+// ComboBox 可编辑下拉框组件
+// 结合了文本输入框和下拉列表的功能，允许用户：
+//   - 从下拉列表中选择预设值
+//   - 直接输入任意数字或文本
+// 实现原理:
+//   - Entry组件作为文本输入主体，支持直接键入
+//   - 下拉按钮触发弹出选项列表（使用widget.PopUp悬浮面板）
+//   - 选中选项后自动填充Entry并触发OnChanged回调
+//   - 提供与widget.Select兼容的API（Selected, SetOptions, SetSelected, Disable, Enable）
+type ComboBox struct {
+	Entry       *widget.Entry  // 文本输入框组件，用户可直接输入文本
+	options     []string       // 下拉选项列表
+	Selected    string         // 当前选中的值，与Entry文本同步
+	OnChanged   func(string)   // 选项变更回调，选中或输入时触发
+	disabled    bool           // 是否禁用
+	dropdownBtn *widget.Button // 下拉触发按钮
+	field       *fyne.Container // 完整字段容器（边框+内部布局），用于获取画布绝对位置
+	popup       *widget.PopUp  // 下拉列表弹窗
+	popupWidth  float32        // 弹窗宽度（与字段宽度一致）
+	itemHeight  float32        // 每个选项的高度
+	canvas      fyne.Canvas   // 画布引用，用于创建PopUp
+}
+
+// NewComboBox 创建可编辑下拉框
+// 参数:
+//   fyneCanvas - Fyne画布（从Window.Canvas()获取），用于创建PopUp弹窗
+//   options - 初始选项列表
+//   onChanged - 选项变更回调函数，当用户选择或输入文本时触发
+// 返回:
+//   *ComboBox - 可编辑下拉框实例
+func NewComboBox(fyneCanvas fyne.Canvas, options []string, onChanged func(string)) *ComboBox {
+	cb := &ComboBox{
+		Entry:      widget.NewEntry(),
+		options:    options,
+		Selected:   "",
+		OnChanged:  onChanged,
+		itemHeight: 32,
+		canvas:     fyneCanvas,
+	}
+
+	// 当用户在输入框中键入时，同步更新Selected并触发回调
+	cb.Entry.OnChanged = func(s string) {
+		cb.Selected = s
+		if cb.OnChanged != nil {
+			cb.OnChanged(s)
+		}
+	}
+
+	return cb
+}
+
+// SetOptions 设置下拉选项列表
+// 参数:
+//   options - 新的选项列表
+func (c *ComboBox) SetOptions(options []string) {
+	c.options = options
+}
+
+// SetSelected 设置选中值
+// 更新Entry文本并触发OnChanged回调
+// 参数:
+//   s - 要选中的值
+func (c *ComboBox) SetSelected(s string) {
+	c.Selected = s
+	c.Entry.SetText(s)
+}
+
+// Disable 禁用组件（同时禁用输入框和下拉功能）
+func (c *ComboBox) Disable() {
+	c.disabled = true
+	c.Entry.Disable()
+	if c.dropdownBtn != nil {
+		c.dropdownBtn.Disable()
+	}
+}
+
+// Enable 启用组件（同时启用输入框和下拉功能）
+func (c *ComboBox) Enable() {
+	c.disabled = false
+	c.Entry.Enable()
+	if c.dropdownBtn != nil {
+		c.dropdownBtn.Enable()
+	}
+}
+
+// SetText 设置输入框文本
+// 与SetSelected功能相同，用于兼容widget.Select的SetText调用
+// 参数:
+//   s - 要设置的文本
+func (c *ComboBox) SetText(s string) {
+	c.SetSelected(s)
+}
+
+// ToggleDropdown 切换下拉列表的显示/隐藏
+// 点击下拉按钮时调用
+// 行为:
+//   - 如果弹窗已显示，则隐藏弹窗
+//   - 如果弹窗未显示，则显示选项列表并定位到字段正下方
+//   - 禁用状态或无选项时不响应
+// 定位逻辑:
+//   - 通过field容器获取在画布上的绝对位置
+//   - 弹窗宽度与字段宽度一致
+//   - 弹窗紧贴字段下方显示
+func (c *ComboBox) ToggleDropdown() {
+	if c.disabled || len(c.options) == 0 {
+		return
+	}
+
+	// 如果弹窗已存在，隐藏它
+	if c.popup != nil {
+		c.popup.Hide()
+		c.popup = nil
+		return
+	}
+
+	// 创建选项列表作为弹窗内容
+	// 每个选项为一个按钮，点击后自动选中并关闭弹窗
+	var items []fyne.CanvasObject
+	for _, opt := range c.options {
+		opt := opt // 捕获循环变量，避免闭包问题
+		btn := widget.NewButton(opt, func() {
+			c.SetSelected(opt)
+			if c.popup != nil {
+				c.popup.Hide()
+				c.popup = nil
+			}
+		})
+		btn.Resize(fyne.NewSize(c.popupWidth, c.itemHeight))
+		items = append(items, btn)
+	}
+
+	// 弹窗内容：VBox包裹选项按钮，带内边距
+	content := container.NewPadded(container.NewVBox(items...))
+	c.popup = widget.NewPopUp(content, c.canvas)
+
+	// 计算弹窗尺寸
+	popupHeight := float32(len(c.options))*c.itemHeight + 16 // 16px for padding
+
+	// 保存引用避免闭包问题
+	popup := c.popup
+	field := c.field
+	popupW := c.popupWidth
+	popupH := popupHeight
+
+	// 第一次Do：显示弹窗
+	// 第二次Do：等待布局完成后，用field容器位置定位弹窗到字段正下方
+	fyne.Do(func() {
+		popup.Show()
+
+		fyne.Do(func() {
+			if field == nil {
+				return
+			}
+			// 获取字段容器在画布上的绝对位置和尺寸
+			fieldPos := field.Position()
+			fieldSize := field.Size()
+
+			// 设置弹窗尺寸与字段一致，位置紧贴字段下方
+			popup.Resize(fyne.NewSize(popupW, popupH))
+			popup.Move(fyne.NewPos(fieldPos.X, fieldPos.Y+fieldSize.Height))
+		})
+	})
+}
+
+// NewComboBoxField 创建带边框的可编辑下拉框字段
+// 组合了Entry输入框、下拉按钮和边框容器，返回完整的UI组件
+// 参数:
+//   fyneCanvas - Fyne画布（从Window.Canvas()获取），用于创建PopUp弹窗
+//   options - 初始选项列表
+//   onChanged - 选项变更回调
+//   width - 字段总宽度
+//   height - 字段总高度
+// 返回:
+//   *ComboBox - 可编辑下拉框实例（用于编程式控制）
+//   *fyne.Container - 完整的视觉组件（边框+输入框+下拉按钮）
+func NewComboBoxField(fyneCanvas fyne.Canvas, options []string, onChanged func(string), width, height float32) (*ComboBox, *fyne.Container) {
+	cb := NewComboBox(fyneCanvas, options, onChanged)
+
+	// 下拉按钮宽度30px，在输入框左侧（前边），Entry占据剩余空间
+	btnWidth := float32(30)
+	entryWidth := width - btnWidth
+
+	// 创建下拉按钮（▾图标），位于输入框前边（左侧）
+	dropdownBtn := widget.NewButton("▾", func() { cb.ToggleDropdown() })
+	dropdownBtn.Resize(fyne.NewSize(btnWidth, height))
+	cb.dropdownBtn = dropdownBtn
+
+	// 设置Entry尺寸
+	cb.Entry.Resize(fyne.NewSize(entryWidth, height))
+
+	// 设置弹窗宽度与总宽度一致
+	cb.popupWidth = width
+
+	// 创建边框容器
+	border := canvas.NewRectangle(ColorBorder)
+	border.CornerRadius = CornerRadius
+	border.SetMinSize(fyne.NewSize(width, height))
+
+	// 创建内部布局：左侧下拉按钮 + 右侧Entry
+	// 下拉按钮在输入框前边（左侧），选择选项后值填入输入框
+	inner := container.NewBorder(nil, nil, dropdownBtn, nil, cb.Entry)
+
+	// 创建完整组件：边框 + 内部布局
+	field := container.NewStack(border, inner)
+	cb.field = field
+
+	return cb, field
+}
