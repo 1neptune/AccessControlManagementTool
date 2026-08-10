@@ -1357,13 +1357,17 @@ func (cw *ConfigWindow) configureOpenSSH(outputText *widget.Entry, opensshBtn, s
 			}
 
 			// 修改sshd配置文件（C:\ProgramData\ssh\sshd_config，由install-sshd.ps1创建）
-			// 先停止sshd服务（避免文件占用），再修改配置项：
-			//   1. 设置Port监听端口：正则'#?Port\s+\d+'匹配 '#Port 22' 或 'Port 22'，替换为对应端口
-			//   2. 添加 Subsystem sftp sftp-server.exe 配置项，方便远程SFTP登录
-			//      先过滤掉所有已有（含被注释）的 'Subsystem sftp' 行，再追加一行，确保配置有效且唯一
+			// 先停止sshd服务（避免文件占用），再清理并重写配置项：
+			//   1. 过滤掉所有已有（含被注释）的 'Port' 行：正则 '^\s*#?\s*Port\s+' 匹配 '#Port 22' 或 'Port 22'
+			//   2. 过滤掉所有已有（含被注释）的 'Subsystem sftp' 行，避免重复
+			//   3. 在文件末尾显式追加 'Port <chosenPort>' 和 'Subsystem sftp sftp-server.exe'
+			// 注意：为何不能使用 -replace「仅替换已有行」的方式设置端口？
+			//       若配置文件原本不存在 Port 行（或 Port 行被注释且正则不匹配），-replace 不会新增任何内容，
+			//       sshd 将回退到默认监听 22 端口。因此必须采用「过滤旧行 + 显式追加新行」的写法，
+			//       确保无论配置文件原本内容如何，Port 和 Subsystem sftp 都一定会写入并生效。
 			// 注意：Windows OpenSSH 安装后默认将 Subsystem sftp 注释掉，若未启用则无法使用 SFTP 登录，
-			//       因此这里必须显式添加并取消注释，保证远程登录可用
-			portConfigCmd := fmt.Sprintf(`powershell -Command "Stop-Service sshd -ErrorAction SilentlyContinue; $configPath = 'C:\ProgramData\ssh\sshd_config'; if (-not (Test-Path $configPath)) { New-Item -ItemType File -Path $configPath -Force }; $lines = @(Get-Content $configPath | Where-Object { $_ -notmatch '^\s*#?\s*Subsystem\s+sftp\s' }); $lines = $lines | ForEach-Object { $_ -replace '#?Port\s+\d+', 'Port %s' }; Set-Content $configPath ($lines + 'Subsystem sftp sftp-server.exe'); 'PORT_OK'"`, chosenPort)
+			//       因此这里必须显式添加并取消注释，保证远程SFTP登录可用
+			portConfigCmd := fmt.Sprintf(`powershell -Command "Stop-Service sshd -ErrorAction SilentlyContinue; $configPath = 'C:\ProgramData\ssh\sshd_config'; if (-not (Test-Path $configPath)) { New-Item -ItemType File -Path $configPath -Force }; $lines = @(Get-Content $configPath | Where-Object { $_ -notmatch '^\s*#?\s*Port\s' -and $_ -notmatch '^\s*#?\s*Subsystem\s+sftp\s' }); Set-Content $configPath (@($lines) + 'Port %s' + 'Subsystem sftp sftp-server.exe'); 'PORT_OK'"`, chosenPort)
 			portConfigOutput, err := client.ExecuteWithTimeout(portConfigCmd, 30*time.Second)
 			if err != nil || !strings.Contains(strings.TrimSpace(portConfigOutput), "PORT_OK") {
 				// 修改配置文件失败，可能是配置文件被占用、权限不足
