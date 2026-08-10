@@ -1346,32 +1346,39 @@ func (cw *ConfigWindow) configureOpenSSH(outputText *widget.Entry, opensshBtn, s
 				return
 			}
 
+			// 确定最终使用的SSH监听端口
+			// USE_38022：使用38022端口；USE_22：38022被占用则使用默认22端口
+			chosenPort := "38022"
 			if portCheckResult == "USE_22" {
-				// 38022端口被占用，使用默认22端口
+				chosenPort = "22"
 				progressCallback("⚠️ 38022端口被占用，使用默认22端口\n")
 			} else {
-				// 38022端口可用，修改sshd监听端口为38022
-				// 配置文件路径：C:\ProgramData\ssh\sshd_config（由install-sshd.ps1创建）
-				// 先停止sshd服务（避免文件占用），再修改配置文件中的Port配置项
-				// 正则'#?Port\s+\d+'匹配 '#Port 22' 或 'Port 22'，替换为 'Port 38022'
 				progressCallback("🔧 正在修改端口为38022...\n")
-				portConfigCmd := `powershell -Command "Stop-Service sshd -ErrorAction SilentlyContinue; $configPath = 'C:\ProgramData\ssh\sshd_config'; if (-not (Test-Path $configPath)) { New-Item -ItemType File -Path $configPath -Force; 'Port 38022' | Set-Content $configPath } else { (Get-Content $configPath) -replace '#?Port\s+\d+', 'Port 38022' | Set-Content $configPath }; 'PORT_OK'"`
-				portConfigOutput, err := client.ExecuteWithTimeout(portConfigCmd, 30*time.Second)
-				if err != nil || !strings.Contains(strings.TrimSpace(portConfigOutput), "PORT_OK") {
-					// 修改端口失败，可能是配置文件被占用、权限不足
-					progressCallback("❌ 修改端口失败\n")
-					fyne.Do(func() {
-						cw.configuring = false
-						opensshBtn.Enable()
-						startBtn.Enable()
-						cancelBtn.Enable()
-						refreshBtn.Enable()
-						cw.showMessageWindow("错误", "修改端口失败")
-					})
-					return
-				}
-				progressCallback("✅ 端口已修改为38022\n")
 			}
+
+			// 修改sshd配置文件（C:\ProgramData\ssh\sshd_config，由install-sshd.ps1创建）
+			// 先停止sshd服务（避免文件占用），再修改配置项：
+			//   1. 设置Port监听端口：正则'#?Port\s+\d+'匹配 '#Port 22' 或 'Port 22'，替换为对应端口
+			//   2. 添加 Subsystem sftp sftp-server.exe 配置项，方便远程SFTP登录
+			//      先过滤掉所有已有（含被注释）的 'Subsystem sftp' 行，再追加一行，确保配置有效且唯一
+			// 注意：Windows OpenSSH 安装后默认将 Subsystem sftp 注释掉，若未启用则无法使用 SFTP 登录，
+			//       因此这里必须显式添加并取消注释，保证远程登录可用
+			portConfigCmd := fmt.Sprintf(`powershell -Command "Stop-Service sshd -ErrorAction SilentlyContinue; $configPath = 'C:\ProgramData\ssh\sshd_config'; if (-not (Test-Path $configPath)) { New-Item -ItemType File -Path $configPath -Force }; $lines = @(Get-Content $configPath | Where-Object { $_ -notmatch '^\s*#?\s*Subsystem\s+sftp\s' }); $lines = $lines | ForEach-Object { $_ -replace '#?Port\s+\d+', 'Port %s' }; Set-Content $configPath ($lines + 'Subsystem sftp sftp-server.exe'); 'PORT_OK'"`, chosenPort)
+			portConfigOutput, err := client.ExecuteWithTimeout(portConfigCmd, 30*time.Second)
+			if err != nil || !strings.Contains(strings.TrimSpace(portConfigOutput), "PORT_OK") {
+				// 修改配置文件失败，可能是配置文件被占用、权限不足
+				progressCallback("❌ 修改端口/Subsystem配置失败\n")
+				fyne.Do(func() {
+					cw.configuring = false
+					opensshBtn.Enable()
+					startBtn.Enable()
+					cancelBtn.Enable()
+					refreshBtn.Enable()
+					cw.showMessageWindow("错误", "修改OpenSSH配置失败")
+				})
+				return
+			}
+			progressCallback("✅ 端口和SFTP子系统配置完成\n")
 
 			// 步骤3.5：启动sshd服务并设置为开机自动启动
 			// 端口修改完成后启动服务，验证服务状态是否为Running
