@@ -4,6 +4,7 @@ import (
 	"access-control-tool/internal/models"
 	"access-control-tool/internal/ssh"
 	"log"
+	"net"
 	"regexp"
 	"sort"
 	"strconv"
@@ -12,14 +13,18 @@ import (
 
 // scanLinuxPorts 扫描Linux服务器上的监听端口
 // 参数:
-//   client - SSH客户端
+//
+//	client - SSH客户端
+//
 // 返回值:
-//   []PortInfo - 端口信息列表
-//   error - 扫描过程中的错误
+//
+//	[]PortInfo - 端口信息列表
+//	error - 扫描过程中的错误
+//
 // 扫描范围:
 //   - 包含监听全局地址的端口（0.0.0.0, ::, :::, *）
 //   - 包含监听非回环具体IP地址的端口（如 192.168.100.53:5437）
-//   - 排除仅监听本地回环地址的端口（127.0.0.1, ::1）
+//   - 排除仅监听本地回环地址的端口（127.0.0.1, ::1, ::ffff:127.0.0.1 等）
 //   - 支持IPv4和IPv6协议
 //   - 支持ss和netstat两种命令输出格式
 //   - 端口号全局去重：同一端口在多个地址监听（如0.0.0.0:5437和192.168.100.53:5437）时合并为一条记录
@@ -57,7 +62,8 @@ func scanLinuxPorts(client *ssh.Client) ([]PortInfo, error) {
 			continue
 		}
 
-		// 排除回环地址（127.0.0.1, ::1）监听的端口，这些端口仅本机访问无需配置访问控制
+		// 排除回环地址监听的端口，这些端口仅本机访问无需配置访问控制
+		// 回环地址包括：127.0.0.1、::1、::ffff:127.0.0.1（IPv4映射IPv6形式，常见于tcp6监听IPv4回环）
 		if isLoopbackAddress(ip) {
 			log.Printf("[PortScanner] 跳过回环地址监听端口: %s:%s", ip, portStr)
 			continue
@@ -90,22 +96,28 @@ func scanLinuxPorts(client *ssh.Client) ([]PortInfo, error) {
 // parseListenAddress 从命令输出行中提取监听的本地地址和端口
 // 兼容ss和netstat两种命令的输出格式，支持IPv4/IPv6/通配符/具体IP地址
 // 参数:
-//   line - 命令输出的单行内容
+//
+//	line - 命令输出的单行内容
+//
 // 返回值:
-//   ip - 监听IP地址（已去除方括号，如"0.0.0.0"、"192.168.100.53"、"::"等）
-//   portStr - 端口字符串
-//   matched - 是否成功匹配到监听端口
+//
+//	ip - 监听IP地址（已去除方括号，如"0.0.0.0"、"192.168.100.53"、"::"等）
+//	portStr - 端口字符串
+//	matched - 是否成功匹配到监听端口
+//
 // 支持的命令输出示例:
 //
 //	ss命令:
 //	  LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1234,fd=3))
 //	  LISTEN 0 128 192.168.100.53:5437 0.0.0.0:* users:(("vastbase",pid=1925782,fd=3))
 //	  LISTEN 0 128 [::]:22 [::]:* users:(("sshd",pid=1234,fd=4))
+//	  LISTEN 0 128 [::ffff:127.0.0.1]:8105 [::]:* users:(("java",pid=281403,fd=39))
 //	  LISTEN 0 128 :::22 :::* users:(("sshd",pid=1234,fd=4))
 //	  LISTEN 0 128 *:80 *:* users:(("nginx",pid=1234,fd=6))
 //	netstat命令:
 //	  tcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN 1234/sshd
 //	  tcp 0 0 192.168.100.53:5437 0.0.0.0:* LISTEN 1925782/vastbase
+//	  tcp6 0 0 127.0.0.1:8105 :::* LISTEN 281403/java
 //	  tcp6 0 0 :::22 :::* LISTEN 1234/sshd
 func parseListenAddress(line string) (ip, portStr string, matched bool) {
 	// 匹配ss命令格式：LISTEN Recv-Q Send-Q LocalAddress PeerAddress ...
@@ -128,22 +140,27 @@ func parseListenAddress(line string) (ip, portStr string, matched bool) {
 // splitAddrPort 将本地地址拆分为IP和端口两部分
 // 处理IPv4、IPv6（含方括号）、通配符等多种地址格式
 // 参数:
-//   addr - 本地地址字符串
+//
+//	addr - 本地地址字符串
+//
 // 返回值:
-//   ip - IP地址（已去除方括号）
-//   portStr - 端口字符串
-//   ok - 是否成功拆分
+//
+//	ip - IP地址（已去除方括号）
+//	portStr - 端口字符串
+//	ok - 是否成功拆分
+//
 // 支持的地址格式示例:
 //
-//	"0.0.0.0:22"          -> ip="0.0.0.0",        port="22"
-//	"192.168.100.53:5437" -> ip="192.168.100.53", port="5437"
-//	"127.0.0.1:631"       -> ip="127.0.0.1",      port="631"
-//	"[::]:22"             -> ip="::",             port="22"
-//	"[::1]:631"           -> ip="::1",            port="631"
-//	":::22"               -> ip="::",             port="22"
-//	"*:22"                -> ip="*",              port="22"
+//	"0.0.0.0:22"                  -> ip="0.0.0.0",            port="22"
+//	"192.168.100.53:5437"         -> ip="192.168.100.53",     port="5437"
+//	"127.0.0.1:631"               -> ip="127.0.0.1",          port="631"
+//	"[::]:22"                     -> ip="::",                 port="22"
+//	"[::1]:631"                   -> ip="::1",                port="631"
+//	"[::ffff:127.0.0.1]:8105"     -> ip="::ffff:127.0.0.1",   port="8105"
+//	":::22"                       -> ip="::",                 port="22"
+//	"*:22"                        -> ip="*",                  port="22"
 func splitAddrPort(addr string) (ip, portStr string, ok bool) {
-	// 处理带方括号的IPv6地址，如 [::]:22 或 [::1]:631
+	// 处理带方括号的IPv6地址，如 [::]:22 或 [::1]:631 或 [::ffff:127.0.0.1]:8105
 	if strings.HasPrefix(addr, "[") {
 		endIdx := strings.Index(addr, "]")
 		if endIdx == -1 {
@@ -160,6 +177,7 @@ func splitAddrPort(addr string) (ip, portStr string, ok bool) {
 
 	// 普通格式：按最后一个冒号拆分IP和端口
 	// 对于IPv6全局地址如 ":::22"，最后一个冒号前为 "::"（IPv6任意地址），后为 "22"
+	// 对于IPv4映射IPv6地址如 "::ffff:127.0.0.1:8105"，最后一个冒号前为 "::ffff:127.0.0.1"，后为 "8105"
 	idx := strings.LastIndex(addr, ":")
 	if idx == -1 {
 		return "", "", false
@@ -168,28 +186,55 @@ func splitAddrPort(addr string) (ip, portStr string, ok bool) {
 }
 
 // isLoopbackAddress 判断IP地址是否为本地回环地址
-// 回环地址仅用于本机内部通信，无需配置访问控制
+// 回环地址仅用于本机内部通信，无需配置访问控制，应被排除
 // 参数:
-//   ip - IP地址字符串（已去除方括号）
+//
+//	ip - IP地址字符串（已去除方括号）
+//
 // 返回值:
-//   bool - 是否为回环地址
-// 回环地址列表:
-//   127.0.0.1 - IPv4回环地址
-//   ::1       - IPv6回环地址
-//   localhost - 主机名形式的回环地址
+//
+//	bool - 是否为回环地址
+//
+// 识别范围（覆盖IPv4/IPv6/混合映射形式）:
+//   - 127.0.0.1 以及整个 127.0.0.0/8 回环网段（如 127.0.0.1）
+//   - ::1             - IPv6回环地址
+//   - ::ffff:127.0.0.1 - IPv4映射IPv6回环地址（tcp6 监听 IPv4 回环地址时的常见格式）
+//   - localhost       - 主机名形式的回环地址
+//
+// 实现说明:
+//   - 优先使用标准库 net.IP.IsLoopback() 判断，能自动识别所有IPv4/IPv6/IPv4映射的回环地址。
+//     例如 "::ffff:127.0.0.1" 经 net.ParseIP 解析后，To4() 可还原为 127.x.x.x，从而正确判定为回环。
+//   - 通配符地址（"0.0.0.0"、"::"、"*"）不属于回环地址：
+//     它们是全局监听地址，需要纳入配置范围，IsLoopback() 对其返回 false，不会被误伤。
 func isLoopbackAddress(ip string) bool {
-	return ip == "127.0.0.1" || ip == "::1" || ip == "localhost"
+	// 主机名形式的回环地址无法用IP解析，单独处理
+	if ip == "localhost" {
+		return true
+	}
+
+	// 使用标准库解析IP并判断是否为回环地址
+	// ParseIP 解析失败（如 "*"）或通配符地址（0.0.0.0、::）均返回 false
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	return parsed.IsLoopback()
 }
 
 // fetchConnectedIPs 获取已建立连接的客户端IP列表
 // 参数:
-//   client - SSH客户端
-//   portMap - 端口信息映射表，用于填充ConnectedIPs字段
+//
+//	client - SSH客户端
+//	portMap - 端口信息映射表，用于填充ConnectedIPs字段
+//
 // 返回值:
-//   error - 执行过程中的错误
+//
+//	error - 执行过程中的错误
+//
 // 支持的命令格式:
-//   ss -tn: ESTAB 0 0 172.19.6.75:22 192.168.21.52:57436
-//   netstat -tn: tcp 0 0 192.168.3.47:46422 192.168.21.52:58155 ESTABLISHED
+//
+//	ss -tn: ESTAB 0 0 172.19.6.75:22 192.168.21.52:57436
+//	netstat -tn: tcp 0 0 192.168.3.47:46422 192.168.21.52:58155 ESTABLISHED
 func fetchConnectedIPs(client *ssh.Client, portMap map[int]*PortInfo) error {
 	output, err := client.Execute("ss -tn 2>/dev/null || netstat -tn 2>/dev/null")
 	if err != nil {
@@ -240,9 +285,10 @@ func fetchConnectedIPs(client *ssh.Client, portMap map[int]*PortInfo) error {
 
 // addConnectedIP 将远程客户端IP添加到端口的ConnectedIPs列表中（去重）
 // 参数:
-//   portMap - 端口信息映射表
-//   localPort - 本地端口号
-//   remoteIP - 远程客户端IP地址
+//
+//	portMap - 端口信息映射表
+//	localPort - 本地端口号
+//	remoteIP - 远程客户端IP地址
 func addConnectedIP(portMap map[int]*PortInfo, localPort int, remoteIP string) {
 	if portMap[localPort] == nil {
 		return
@@ -272,22 +318,29 @@ func addConnectedIP(portMap map[int]*PortInfo, localPort int, remoteIP string) {
 
 // refreshConnectedIPsLinux Linux平台刷新指定端口的连接IP
 // 参数:
-//   server - 服务器信息
-//   port - 端口号
+//
+//	server - 服务器信息
+//	port - 端口号
+//
 // 返回值:
-//   []string - 客户端IP列表
-//   error - 执行过程中的错误
+//
+//	[]string - 客户端IP列表
+//	error - 执行过程中的错误
 func refreshConnectedIPsLinux(server *models.Server, port int) ([]string, error) {
 	return GetConnectedIPsForPort(server, port)
 }
 
 // GetConnectedIPsForPort 获取指定端口的已建立连接客户端IP列表
 // 参数:
-//   server - 服务器信息
-//   port - 端口号
+//
+//	server - 服务器信息
+//	port - 端口号
+//
 // 返回值:
-//   []string - 客户端IP列表
-//   error - 执行过程中的错误
+//
+//	[]string - 客户端IP列表
+//	error - 执行过程中的错误
+//
 // 用途:
 //   - 用于配置窗口切换端口时快速刷新关联业务IP
 //   - 避免重新扫描所有端口，提高性能
@@ -385,9 +438,10 @@ func GetConnectedIPsForPort(server *models.Server, port int) ([]string, error) {
 
 // processPortLine 处理端口行，提取端口号和服务名称
 // 参数:
-//   line - 原始行内容
-//   portStr - 端口号字符串
-//   portMap - 端口信息映射表
+//
+//	line - 原始行内容
+//	portStr - 端口号字符串
+//	portMap - 端口信息映射表
 func processPortLine(line, portStr string, portMap map[int]*PortInfo) {
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
@@ -396,8 +450,8 @@ func processPortLine(line, portStr string, portMap map[int]*PortInfo) {
 
 	if portMap[port] == nil {
 		portMap[port] = &PortInfo{
-			Port:        port,
-			ServiceName: extractServiceName(line),
+			Port:         port,
+			ServiceName:  extractServiceName(line),
 			ConnectedIPs: make([]string, 0),
 		}
 		log.Printf("[PortScanner] 发现全局监听端口: %d", port)
@@ -410,9 +464,12 @@ func processPortLine(line, portStr string, portMap map[int]*PortInfo) {
 
 // extractServiceName 从命令输出行中提取服务名称
 // 参数:
-//   line - 原始行内容
+//
+//	line - 原始行内容
+//
 // 返回值:
-//   string - 服务名称，未找到返回空字符串
+//
+//	string - 服务名称，未找到返回空字符串
 func extractServiceName(line string) string {
 	// 优先匹配ss命令格式（users:(("service_name"）
 	reSS := regexp.MustCompile(`users:\(\("([^"]+)"`)
