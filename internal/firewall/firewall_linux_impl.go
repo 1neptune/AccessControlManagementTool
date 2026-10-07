@@ -395,7 +395,7 @@ func startAndEnableIptablesServices(client SSHClient, serviceName string, callba
 func checkPortServiceIsDocker(client SSHClient, port int) (bool, error) {
 	log.Printf("[Firewall] 检查端口%d服务是否是Docker服务", port)
 
-	output, err := client.Execute(fmt.Sprintf(`ss -tlnp 2>/dev/null | grep -w ":%d" || netstat -tlnp 2>/dev/null | grep -w ":%d"`, port, port))
+	output, err := client.Execute(fmt.Sprintf(`ss -tlnp 2>/dev/null | grep -w "%d" || netstat -tlnp 2>/dev/null | grep -w "%d"`, port, port))
 	if err != nil {
 		log.Printf("[Firewall] 检查端口服务失败: %v", err)
 		return false, err
