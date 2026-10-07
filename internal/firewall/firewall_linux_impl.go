@@ -391,7 +391,7 @@ func startAndEnableIptablesServices(client SSHClient, serviceName string, callba
 // 返回值:
 //   bool - 是否为Docker服务
 //   error - 检测过程中的错误
-// 判断逻辑: 通过ss/netstat输出判断端口服务名是否包含docker-prox
+// 判断逻辑: 通过ss/netstat输出判断端口服务名是否包含docker
 func checkPortServiceIsDocker(client SSHClient, port int) (bool, error) {
 	log.Printf("[Firewall] 检查端口%d服务是否是Docker服务", port)
 
@@ -401,7 +401,7 @@ func checkPortServiceIsDocker(client SSHClient, port int) (bool, error) {
 		return false, err
 	}
 
-	isDocker := strings.Contains(strings.ToLower(output), "docker-prox")
+	isDocker := strings.Contains(strings.ToLower(output), "docker")
 	log.Printf("[Firewall] 端口%d服务是否为Docker: %v", port, isDocker)
 
 	return isDocker, nil
