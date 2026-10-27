@@ -244,6 +244,21 @@ func installIptablesServices(client SSHClient, packageManager string, packageNam
 	var installCmd string
 	switch packageManager {
 	case "apt":
+		// 安装前先预设debconf答案，避免安装过程中交互询问
+		// 问题: 是否要在下次重启后自动保存当前iptables规则 (iptables-persistent/autosave_v4/v6)
+		// 答案: true代表"是"，安装时不会再弹出交互询问
+		preseedCmds := []string{
+			"echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections",
+			"echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections",
+		}
+		for _, preseedCmd := range preseedCmds {
+			if _, err := client.Execute(preseedCmd); err != nil {
+				log.Printf("[Firewall] 预设debconf答案失败: %v", err)
+				if callback != nil {
+					callback(fmt.Sprintf("⚠️ 预设debconf答案失败: %v\n", err))
+				}
+			}
+		}
 		installCmd = fmt.Sprintf("apt install -y %s", packageName)
 	case "yum":
 		installCmd = fmt.Sprintf("yum install -y %s", packageName)
