@@ -8,20 +8,24 @@ import (
 )
 
 type DistroInfo struct {
-	Name                  string // 发行版名称：ubuntu/kali/centos/redhat/rocky
-	PackageManager        string // 包管理器：apt/yum
-	FirewallType          string // 防火墙类型：firewalld/ufw
-	IptablesPackageName   string // iptables持久化包名：iptables-persistent（apt）/ iptables-services（yum）
-	IptablesServiceName   string // iptables服务名：netfilter-persistent（apt）/ iptables（yum）
-	IptablesSaveCommand   string // iptables规则保存命令：netfilter-persistent save / service iptables save
+	Name                string // 发行版名称：ubuntu/kali/centos/redhat/rocky
+	PackageManager      string // 包管理器：apt/yum
+	FirewallType        string // 防火墙类型：firewalld/ufw
+	IptablesPackageName string // iptables持久化包名：iptables-persistent（apt）/ iptables-services（yum）
+	IptablesServiceName string // iptables服务名：netfilter-persistent（apt）/ iptables（yum）
+	IptablesSaveCommand string // iptables规则保存命令：netfilter-persistent save / service iptables save
 }
 
 // detectDistro 检测Linux发行版信息
 // 参数:
-//   client - SSH客户端
+//
+//	client - SSH客户端
+//
 // 返回值:
-//   DistroInfo - 发行版信息
-//   error - 检测过程中的错误
+//
+//	DistroInfo - 发行版信息
+//	error - 检测过程中的错误
+//
 // 支持的发行版: ubuntu/kali/centos/redhat/rocky
 func detectDistro(client SSHClient) (DistroInfo, error) {
 	log.Printf("[Firewall] 开始检测Linux发行版")
@@ -85,10 +89,13 @@ func detectDistro(client SSHClient) (DistroInfo, error) {
 
 // checkFirewalldStatus 检查firewalld状态
 // 参数:
-//   client - SSH客户端
+//
+//	client - SSH客户端
+//
 // 返回值:
-//   bool - 是否运行中
-//   error - 检查过程中的错误
+//
+//	bool - 是否运行中
+//	error - 检查过程中的错误
 func checkFirewalldStatus(client SSHClient) (bool, error) {
 	output, err := client.Execute(`systemctl is-active firewalld 2>/dev/null || echo 'inactive'`)
 	if err != nil {
@@ -99,10 +106,13 @@ func checkFirewalldStatus(client SSHClient) (bool, error) {
 
 // checkUfwStatus 检查ufw状态
 // 参数:
-//   client - SSH客户端
+//
+//	client - SSH客户端
+//
 // 返回值:
-//   bool - 是否运行中
-//   error - 检查过程中的错误
+//
+//	bool - 是否运行中
+//	error - 检查过程中的错误
 func checkUfwStatus(client SSHClient) (bool, error) {
 	output, err := client.Execute(`systemctl is-active ufw 2>/dev/null || echo 'inactive'`)
 	if err != nil {
@@ -113,14 +123,19 @@ func checkUfwStatus(client SSHClient) (bool, error) {
 
 // stopAndDisableFirewall 停止并禁用系统防火墙
 // 参数:
-//   client - SSH客户端
-//   firewallType - 防火墙类型（firewalld/ufw）
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	firewallType - 防火墙类型（firewalld/ufw）
+//	callback - 进度回调函数
+//
 // 返回值:
-//   error - 操作过程中的错误
+//
+//	error - 操作过程中的错误
+//
 // 执行命令:
-//   firewalld: systemctl stop firewalld && systemctl disable firewalld
-//   ufw: systemctl stop ufw && systemctl disable ufw
+//
+//	firewalld: systemctl stop firewalld && systemctl disable firewalld
+//	ufw: systemctl stop ufw && systemctl disable ufw
 func stopAndDisableFirewall(client SSHClient, firewallType string, callback func(message string)) error {
 	log.Printf("[Firewall] 停止并禁用防火墙，类型: %s", firewallType)
 
@@ -166,12 +181,15 @@ func stopAndDisableFirewall(client SSHClient, firewallType string, callback func
 
 // checkIptablesServicesInstalled 检查iptables持久化服务是否安装和启动
 // 参数:
-//   client - SSH客户端
-//   serviceName - 服务名（netfilter-persistent / iptables）
+//
+//	client - SSH客户端
+//	serviceName - 服务名（netfilter-persistent / iptables）
+//
 // 返回值:
-//   bool - 是否已安装
-//   bool - 是否已启动
-//   error - 检查过程中的错误
+//
+//	bool - 是否已安装
+//	bool - 是否已启动
+//	error - 检查过程中的错误
 func checkIptablesServicesInstalled(client SSHClient, serviceName string) (bool, bool, error) {
 	log.Printf("[Firewall] 检查iptables服务状态，服务名: %s", serviceName)
 
@@ -200,19 +218,22 @@ func checkIptablesServicesInstalled(client SSHClient, serviceName string) (bool,
 	return isInstalled, isActive, nil
 }
 
-
-
 // installIptablesServices 安装iptables持久化包
 // 参数:
-//   client - SSH客户端
-//   packageManager - 包管理器（apt/yum）
-//   packageName - 包名（iptables-persistent / iptables-services）
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	packageManager - 包管理器（apt/yum）
+//	packageName - 包名（iptables-persistent / iptables-services）
+//	callback - 进度回调函数
+//
 // 返回值:
-//   error - 安装过程中的错误
+//
+//	error - 安装过程中的错误
+//
 // 判断逻辑: 使用白名单机制，安装输出中包含以下关键词即为成功:
-//   already installed, nothing to do, installed, success, completed, 已安装
-//   其他情况均为失败
+//
+//	already installed, nothing to do, installed, success, completed, 已安装
+//	其他情况均为失败
 func installIptablesServices(client SSHClient, packageManager string, packageName string, callback func(message string)) error {
 	log.Printf("[Firewall] 安装iptables持久化包，包管理器: %s, 包名: %s", packageManager, packageName)
 
@@ -278,11 +299,14 @@ func installIptablesServices(client SSHClient, packageManager string, packageNam
 
 // installIpsetPackage 安装ipset包
 // 参数:
-//   client - SSH客户端
-//   packageManager - 包管理器（apt/yum）
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	packageManager - 包管理器（apt/yum）
+//	callback - 进度回调函数
+//
 // 返回值:
-//   error - 安装过程中的错误
+//
+//	error - 安装过程中的错误
 func installIpsetPackage(client SSHClient, packageManager string, callback func(message string)) error {
 	log.Printf("[Firewall] 安装ipset包，包管理器: %s", packageManager)
 
@@ -348,11 +372,14 @@ func installIpsetPackage(client SSHClient, packageManager string, callback func(
 
 // startAndEnableIptablesServices 启动并启用iptables持久化服务
 // 参数:
-//   client - SSH客户端
-//   serviceName - 服务名（netfilter-persistent / iptables）
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	serviceName - 服务名（netfilter-persistent / iptables）
+//	callback - 进度回调函数
+//
 // 返回值:
-//   error - 操作过程中的错误
+//
+//	error - 操作过程中的错误
 func startAndEnableIptablesServices(client SSHClient, serviceName string, callback func(message string)) error {
 	log.Printf("[Firewall] 启动并启用iptables服务，服务名: %s", serviceName)
 
@@ -386,11 +413,15 @@ func startAndEnableIptablesServices(client SSHClient, serviceName string, callba
 
 // checkPortServiceIsDocker 检查端口服务是否是Docker服务
 // 参数:
-//   client - SSH客户端
-//   port - 端口号
+//
+//	client - SSH客户端
+//	port - 端口号
+//
 // 返回值:
-//   bool - 是否为Docker服务
-//   error - 检测过程中的错误
+//
+//	bool - 是否为Docker服务
+//	error - 检测过程中的错误
+//
 // 判断逻辑: 通过ss/netstat输出判断端口服务名是否包含docker
 func checkPortServiceIsDocker(client SSHClient, port int) (bool, error) {
 	log.Printf("[Firewall] 检查端口%d服务是否是Docker服务", port)
@@ -409,17 +440,27 @@ func checkPortServiceIsDocker(client SSHClient, port int) (bool, error) {
 
 // createIpsetRestoreService 创建ipset自启动服务（先检查是否已存在）
 // 参数:
-//   client - SSH客户端
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	packageManager - 包管理器（apt/yum），决定使用对应的systemd服务文件
+//	callback - 进度回调函数
+//
 // 返回值:
-//   error - 操作过程中的错误
+//
+//	error - 操作过程中的错误
+//
 // 执行流程:
-//   1. 判断ipset-restore服务是否已启用（systemctl is-enabled ipset-restore）
-//   2. 如果已启用，判断是否已启动（systemctl is-active ipset-restore）
-//   3. 如果已启用且已启动，跳过创建
-//   4. 如果已启用但未启动，只启动服务
-//   5. 如果未启用，创建服务文件并启用启动
-func createIpsetRestoreService(client SSHClient, callback func(message string)) error {
+//  1. 判断ipset-restore服务是否已启用（systemctl is-enabled ipset-restore）
+//  2. 如果已启用，判断是否已启动（systemctl is-active ipset-restore）
+//  3. 如果已启用且已启动，跳过创建
+//  4. 如果已启用但未启动，只启动服务
+//  5. 如果未启用，创建服务文件并启用启动
+//
+// 服务文件差异:
+//   - yum系(CentOS/RHEL/Rocky): Before=iptables.service, WantedBy=multi-user.target
+//   - apt系(Ubuntu/Kali/Debian): Before=network-pre.target netfilter-persistent.service,
+//     WantedBy=sysinit.target
+func createIpsetRestoreService(client SSHClient, packageManager string, callback func(message string)) error {
 	log.Printf("[Firewall] 检查并创建ipset自启动服务")
 
 	if callback != nil {
@@ -471,7 +512,29 @@ func createIpsetRestoreService(client SSHClient, callback func(message string)) 
 		callback("📦 创建ipset-restore服务...\n")
 	}
 
-	serviceFile := `[Unit]
+	// 根据包管理器选择对应的服务文件
+	// yum系: Before=iptables.service, WantedBy=multi-user.target
+	// apt系: 需要在网络初始化前(network-pre.target)恢复ipset规则，
+	//        核心是netfilter-persistent.service的自启顺序，WantedBy=sysinit.target
+	var serviceFile string
+	switch packageManager {
+	case "apt":
+		serviceFile = `[Unit]
+Description=Restore ipset rules on boot
+DefaultDependencies=no
+Before=network-pre.target netfilter-persistent.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '/sbin/ipset restore -exist < /etc/ipset.conf'
+
+[Install]
+WantedBy=sysinit.target
+`
+	default:
+		serviceFile = `[Unit]
 Description=Restore ipset rules on boot
 Before=iptables.service
 
@@ -482,6 +545,7 @@ ExecStart=/bin/sh -c '/sbin/ipset restore -exist < /etc/ipset.conf'
 [Install]
 WantedBy=multi-user.target
 `
+	}
 
 	createCmd := fmt.Sprintf("cat > /etc/systemd/system/ipset-restore.service <<'EOF'\n%sEOF", serviceFile)
 	_, err := client.Execute(createCmd)
@@ -521,18 +585,22 @@ WantedBy=multi-user.target
 
 // manageIpset 管理ipset白名单
 // 参数:
-//   client - SSH客户端
-//   port - 端口号
-//   ipWhitelist - IP白名单（逗号分隔）
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	port - 端口号
+//	ipWhitelist - IP白名单（逗号分隔）
+//	callback - 进度回调函数
+//
 // 返回值:
-//   error - 操作过程中的错误
+//
+//	error - 操作过程中的错误
+//
 // 执行流程:
-//   1. 判断ipset集合是否存在（{port}_allow_ip）
-//   2. 如果不存在，创建集合 ipset create {port}_allow_ip hash:net
-//   3. 检查每个IP是否已存在于集合中
-//   4. 如果不存在，添加IP ipset add -exist {port}_allow_ip {ip}
-//   5. 保存ipset配置 ipset save > /etc/ipset.conf
+//  1. 判断ipset集合是否存在（{port}_allow_ip）
+//  2. 如果不存在，创建集合 ipset create {port}_allow_ip hash:net
+//  3. 检查每个IP是否已存在于集合中
+//  4. 如果不存在，添加IP ipset add -exist {port}_allow_ip {ip}
+//  5. 保存ipset配置 ipset save > /etc/ipset.conf
 func manageIpset(client SSHClient, port int, ipWhitelist string, callback func(message string)) error {
 	log.Printf("[Firewall] 管理ipset白名单，端口: %d, IP白名单: %s", port, ipWhitelist)
 
@@ -627,15 +695,20 @@ func manageIpset(client SSHClient, port int, ipWhitelist string, callback func(m
 
 // checkDockerChains 检查Docker相关链是否可用
 // 参数:
-//   client - SSH客户端
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	callback - 进度回调函数
+//
 // 返回值:
-//   bool - 链是否可用
-//   error - 检测过程中的错误
+//
+//	bool - 链是否可用
+//	error - 检测过程中的错误
+//
 // 检查逻辑:
-//   只检查 DOCKER 和 DOCKER-USER 两个链
-//   如果输出包含 "No chain/target/match by that name" 或输出为空，说明链不可用
-//   链不可用时尝试重启Docker服务
+//
+//	只检查 DOCKER 和 DOCKER-USER 两个链
+//	如果输出包含 "No chain/target/match by that name" 或输出为空，说明链不可用
+//	链不可用时尝试重启Docker服务
 func checkDockerChains(client SSHClient, callback func(message string)) (bool, error) {
 	log.Printf("[Firewall] 检查Docker相关链是否可用")
 
@@ -712,30 +785,35 @@ func checkDockerChains(client SSHClient, callback func(message string)) (bool, e
 
 // ensureDockerChains 统一检查Docker环境及DOCKER链可用性
 // 参数:
-//   client - SSH客户端
-//   port - 端口号
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	port - 端口号
+//	callback - 进度回调函数
+//
 // 返回值:
-//   isDockerEnv - 服务器是否存在Docker运行环境（用于决定是否需要检查链）
-//   portIsDockerProxy - 目标端口是否由docker-proxy监听（用于决定规则添加到INPUT还是DOCKER-USER链）
-//   error - 操作过程中的错误
+//
+//	isDockerEnv - 服务器是否存在Docker运行环境（用于决定是否需要检查链）
+//	portIsDockerProxy - 目标端口是否由docker-proxy监听（用于决定规则添加到INPUT还是DOCKER-USER链）
+//	error - 操作过程中的错误
+//
 // 执行流程:
-//   1. 检查服务器上Docker服务是否正在运行（systemctl is-active docker）
-//      - 这是判断是否为Docker环境的依据，与目标端口无关
-//      - 只要Docker服务在运行，就说明服务器处于Docker环境
-//   2. 如果Docker服务未运行，返回(false, false, nil)，跳过所有Docker相关检查
-//   3. 如果Docker服务正在运行，检查DOCKER和DOCKER-USER链是否可用
-//      - 无论目标端口是普通服务还是Docker容器服务，只要Docker环境存在
-//        就必须确保DOCKER和DOCKER-USER链可用
-//      - 这是为了防止配置普通端口规则时破坏Docker容器的网络访问
-//   4. 如果链可用，检查目标端口是否由docker-proxy监听（用于后续规则选择）
-//   5. 如果链不可用，执行systemctl restart docker重启Docker服务
-//      - 背景: Docker服务在iptables安装之后启动时，iptables规则冲突
-//        会导致Docker的DOCKER和DOCKER-USER链无法正确创建
-//      - 重启Docker可以让它重新初始化iptables链，恢复Docker网络功能
-//   6. 等待3秒让Docker服务完全启动
-//   7. 再次检查DOCKER和DOCKER-USER链是否可用
-//   8. 返回Docker环境状态、端口是否为docker-proxy、链可用性结果
+//  1. 检查服务器上Docker服务是否正在运行（systemctl is-active docker）
+//     - 这是判断是否为Docker环境的依据，与目标端口无关
+//     - 只要Docker服务在运行，就说明服务器处于Docker环境
+//  2. 如果Docker服务未运行，返回(false, false, nil)，跳过所有Docker相关检查
+//  3. 如果Docker服务正在运行，检查DOCKER和DOCKER-USER链是否可用
+//     - 无论目标端口是普通服务还是Docker容器服务，只要Docker环境存在
+//     就必须确保DOCKER和DOCKER-USER链可用
+//     - 这是为了防止配置普通端口规则时破坏Docker容器的网络访问
+//  4. 如果链可用，检查目标端口是否由docker-proxy监听（用于后续规则选择）
+//  5. 如果链不可用，执行systemctl restart docker重启Docker服务
+//     - 背景: Docker服务在iptables安装之后启动时，iptables规则冲突
+//     会导致Docker的DOCKER和DOCKER-USER链无法正确创建
+//     - 重启Docker可以让它重新初始化iptables链，恢复Docker网络功能
+//  6. 等待3秒让Docker服务完全启动
+//  7. 再次检查DOCKER和DOCKER-USER链是否可用
+//  8. 返回Docker环境状态、端口是否为docker-proxy、链可用性结果
+//
 // 注意:
 //   - 此函数必须在iptables服务检查通过之后、配置任何规则之前调用
 //   - 关键设计: 只要服务器上有Docker服务在运行，不管配置的是什么端口，
@@ -865,21 +943,28 @@ func ensureDockerChains(client SSHClient, port int, callback func(message string
 
 // createIptablesRules 创建iptables规则（先检查规则是否已存在）
 // 参数:
-//   client - SSH客户端
-//   port - 端口号
-//   ipWhitelist - IP白名单（逗号分隔）
-//   isDocker - 是否为Docker服务
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	port - 端口号
+//	ipWhitelist - IP白名单（逗号分隔）
+//	isDocker - 是否为Docker服务
+//	callback - 进度回调函数
+//
 // 返回值:
-//   error - 操作过程中的错误
+//
+//	error - 操作过程中的错误
+//
 // 非Docker环境（INPUT链）:
-//   iptables -A INPUT -p tcp --dport {port} -m set --match-set {port}_allow_ip src -j ACCEPT
-//   iptables -A INPUT -p tcp --dport {port} -j LOG --log-prefix "iptables-drop-{port}: "
-//   iptables -A INPUT -p tcp --dport {port} -j DROP
+//
+//	iptables -A INPUT -p tcp --dport {port} -m set --match-set {port}_allow_ip src -j ACCEPT
+//	iptables -A INPUT -p tcp --dport {port} -j LOG --log-prefix "iptables-drop-{port}: "
+//	iptables -A INPUT -p tcp --dport {port} -j DROP
+//
 // Docker环境（DOCKER-USER链）:
-//   iptables -I DOCKER-USER 1 -p tcp --dport {port} -m set --match-set {port}_allow_ip src -j ACCEPT
-//   iptables -I DOCKER-USER 2 -p tcp --dport {port} -j LOG --log-prefix "iptables-drop-{port}: "
-//   iptables -I DOCKER-USER 3 -p tcp --dport {port} -j DROP
+//
+//	iptables -I DOCKER-USER 1 -p tcp --dport {port} -m set --match-set {port}_allow_ip src -j ACCEPT
+//	iptables -I DOCKER-USER 2 -p tcp --dport {port} -j LOG --log-prefix "iptables-drop-{port}: "
+//	iptables -I DOCKER-USER 3 -p tcp --dport {port} -j DROP
 func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocker bool, callback func(message string)) error {
 	log.Printf("[Firewall] 创建iptables规则，端口: %d, Docker环境: %v", port, isDocker)
 
@@ -891,9 +976,9 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 	logPrefix := fmt.Sprintf("iptables-drop-%d: ", port)
 
 	type ruleInfo struct {
-		checkCmd  string
-		addCmd    string
-		ruleType  string
+		checkCmd string
+		addCmd   string
+		ruleType string
 	}
 
 	var rules []ruleInfo
@@ -907,17 +992,17 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 		rules = []ruleInfo{
 			{
 				checkCmd: fmt.Sprintf("iptables -C INPUT -p tcp --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", port, setName),
-				addCmd: fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -m set --match-set %s src -j ACCEPT", port, setName),
+				addCmd:   fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -m set --match-set %s src -j ACCEPT", port, setName),
 				ruleType: "允许",
 			},
 			{
 				checkCmd: fmt.Sprintf("iptables -C INPUT -p tcp --dport %d -j LOG --log-prefix \"%s\" 2>/dev/null", port, logPrefix),
-				addCmd: fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -j LOG --log-prefix \"%s\"", port, logPrefix),
+				addCmd:   fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -j LOG --log-prefix \"%s\"", port, logPrefix),
 				ruleType: "记录",
 			},
 			{
 				checkCmd: fmt.Sprintf("iptables -C INPUT -p tcp --dport %d -j DROP 2>/dev/null", port),
-				addCmd: fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -j DROP", port),
+				addCmd:   fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -j DROP", port),
 				ruleType: "拒绝",
 			},
 		}
@@ -930,17 +1015,17 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 		rules = []ruleInfo{
 			{
 				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p tcp --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", port, setName),
-				addCmd: fmt.Sprintf("iptables -I DOCKER-USER 1 -p tcp --dport %d -m set --match-set %s src -j ACCEPT", port, setName),
+				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 1 -p tcp --dport %d -m set --match-set %s src -j ACCEPT", port, setName),
 				ruleType: "允许",
 			},
 			{
 				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p tcp --dport %d -j LOG --log-prefix \"%s\" 2>/dev/null", port, logPrefix),
-				addCmd: fmt.Sprintf("iptables -I DOCKER-USER 2 -p tcp --dport %d -j LOG --log-prefix \"%s\"", port, logPrefix),
+				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 2 -p tcp --dport %d -j LOG --log-prefix \"%s\"", port, logPrefix),
 				ruleType: "记录",
 			},
 			{
 				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p tcp --dport %d -j DROP 2>/dev/null", port),
-				addCmd: fmt.Sprintf("iptables -I DOCKER-USER 3 -p tcp --dport %d -j DROP", port),
+				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 3 -p tcp --dport %d -j DROP", port),
 				ruleType: "拒绝",
 			},
 		}
@@ -986,29 +1071,33 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 
 // configureLinux 执行Linux环境验证和防火墙配置前置检查
 // 参数:
-//   client - SSH客户端
-//   server - 服务器信息
-//   port - 要配置的端口
-//   ipWhitelist - IP白名单
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	server - 服务器信息
+//	port - 要配置的端口
+//	ipWhitelist - IP白名单
+//	callback - 进度回调函数
+//
 // 返回值:
-//   *ConfigResult - 配置结果
-//   error - 配置过程中的错误
+//
+//	*ConfigResult - 配置结果
+//	error - 配置过程中的错误
+//
 // 执行流程:
-//   1. 检测发行版信息
-//   2. 检查防火墙状态，停止并禁用系统防火墙（firewalld/ufw）
-//   3. 检查iptables-services是否安装和启动
-//      - 如果未安装，使用包管理器安装并启动
-//      - 如果已安装但未启动，启动服务
-//   4. 统一检查Docker环境及DOCKER链可用性
-//      - 检查端口服务是否存在docker-proxy，判断是否为Docker环境
-//      - 如果是Docker环境，检查DOCKER和DOCKER-USER链是否可用
-//      - 如果链不可用，重启Docker服务以重建链
-//      - 此步骤确保在配置规则之前Docker网络功能正常
-//   5. 管理ipset白名单（创建集合、添加IP、保存配置）
-//   6. 创建ipset自启动服务（系统启动时恢复ipset规则）
-//   7. 创建iptables规则（根据Docker环境选择INPUT或DOCKER-USER链）
-//   8. 保存iptables规则
+//  1. 检测发行版信息
+//  2. 检查防火墙状态，停止并禁用系统防火墙（firewalld/ufw）
+//  3. 检查iptables-services是否安装和启动
+//     - 如果未安装，使用包管理器安装并启动
+//     - 如果已安装但未启动，启动服务
+//  4. 统一检查Docker环境及DOCKER链可用性
+//     - 检查端口服务是否存在docker-proxy，判断是否为Docker环境
+//     - 如果是Docker环境，检查DOCKER和DOCKER-USER链是否可用
+//     - 如果链不可用，重启Docker服务以重建链
+//     - 此步骤确保在配置规则之前Docker网络功能正常
+//  5. 管理ipset白名单（创建集合、添加IP、保存配置）
+//  6. 创建ipset自启动服务（系统启动时恢复ipset规则）
+//  7. 创建iptables规则（根据Docker环境选择INPUT或DOCKER-USER链）
+//  8. 保存iptables规则
 func configureLinux(client SSHClient, server *models.Server, port int, ipWhitelist string, callback func(message string)) (*ConfigResult, error) {
 	log.Printf("[Firewall] 开始执行Linux环境验证")
 
@@ -1195,7 +1284,7 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 		}
 		ipWhitelist = "127.0.0.1"
 	}
-	
+
 	if err := manageIpset(client, port, ipWhitelist, callback); err != nil {
 		log.Printf("[Firewall] 管理ipset白名单失败: %v", err)
 		return &ConfigResult{
@@ -1206,7 +1295,7 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 	}
 
 	// Step 6: 创建ipset自启动服务
-	if err := createIpsetRestoreService(client, callback); err != nil {
+	if err := createIpsetRestoreService(client, distroInfo.PackageManager, callback); err != nil {
 		log.Printf("[Firewall] 创建ipset自启动服务失败: %v", err)
 		return &ConfigResult{
 			Success: false,
@@ -1250,33 +1339,38 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 
 // deconfigureLinux 取消配置Linux防火墙
 // 参数:
-//   client - SSH客户端
-//   port - 要取消配置的端口
-//   ipWhitelist - IP白名单（空表示完整取消，非空表示只删除指定IP白名单）
-//   saveCommand - iptables规则保存命令
-//   callback - 进度回调函数
+//
+//	client - SSH客户端
+//	port - 要取消配置的端口
+//	ipWhitelist - IP白名单（空表示完整取消，非空表示只删除指定IP白名单）
+//	saveCommand - iptables规则保存命令
+//	callback - 进度回调函数
+//
 // 返回值:
-//   error - 操作过程中的错误
+//
+//	error - 操作过程中的错误
+//
 // 执行流程:
-//   先执行环境验证:
-//     1. 检测发行版信息
-//     2. 检查防火墙状态
-//     3. 检查iptables服务状态
-//     4. 统一检查Docker环境及DOCKER链可用性
-//        - 确保在取消配置前Docker网络环境正常
-//        - 如果Docker链不可用，重启Docker服务重建链
-//     5. 检查ipset集合
-//     6. 显示Docker环境检测结果
-//     7. 检查对应链规则是否存在
-//   
-//   情况1: 有白名单（填写了IP）- 只删除指定IP白名单
-//     1. 判断IP是否在集合中，如果存在则删除，不存在则跳过
-//     2. 保存ipset配置
-//   
-//   情况2: 无白名单（空）- 完整取消配置
-//     1. 判断是否有对应端口的规则，如果存在则删除规则（INPUT链和DOCKER-USER链）
-//     2. 判断是否有对应端口的ipset集合，如果存在则删除集合
-//     3. 保存iptables规则
+//
+//	先执行环境验证:
+//	  1. 检测发行版信息
+//	  2. 检查防火墙状态
+//	  3. 检查iptables服务状态
+//	  4. 统一检查Docker环境及DOCKER链可用性
+//	     - 确保在取消配置前Docker网络环境正常
+//	     - 如果Docker链不可用，重启Docker服务重建链
+//	  5. 检查ipset集合
+//	  6. 显示Docker环境检测结果
+//	  7. 检查对应链规则是否存在
+//
+//	情况1: 有白名单（填写了IP）- 只删除指定IP白名单
+//	  1. 判断IP是否在集合中，如果存在则删除，不存在则跳过
+//	  2. 保存ipset配置
+//
+//	情况2: 无白名单（空）- 完整取消配置
+//	  1. 判断是否有对应端口的规则，如果存在则删除规则（INPUT链和DOCKER-USER链）
+//	  2. 判断是否有对应端口的ipset集合，如果存在则删除集合
+//	  3. 保存iptables规则
 func deconfigureLinux(client SSHClient, port int, ipWhitelist string, saveCommand string, callback func(message string)) error {
 	log.Printf("[Firewall] 开始取消配置Linux防火墙，端口: %d, 白名单: %s", port, ipWhitelist)
 
