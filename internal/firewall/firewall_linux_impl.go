@@ -323,7 +323,21 @@ func installIptablesServices(client SSHClient, packageManager string, packageNam
 //
 //	error - 安装过程中的错误
 func installIpsetPackage(client SSHClient, packageManager string, callback func(message string)) error {
-	log.Printf("[Firewall] 安装ipset包，包管理器: %s", packageManager)
+	log.Printf("[Firewall] 检查并安装ipset包，包管理器: %s", packageManager)
+
+	if callback != nil {
+		callback("🔍 检查ipset是否已安装...\n")
+	}
+
+	// 先校验ipset是否已安装，已安装则跳过安装
+	checkOutput, checkErr := client.Execute(`command -v ipset 2>/dev/null || echo 'not_installed'`)
+	if checkErr == nil && strings.TrimSpace(checkOutput) != "" && strings.TrimSpace(checkOutput) != "not_installed" {
+		log.Printf("[Firewall] ipset已安装，跳过安装: %s", strings.TrimSpace(checkOutput))
+		if callback != nil {
+			callback("✅ ipset已安装，跳过安装\n")
+		}
+		return nil
+	}
 
 	if callback != nil {
 		callback("📦 安装ipset包...\n")
