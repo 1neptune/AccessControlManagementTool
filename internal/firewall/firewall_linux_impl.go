@@ -1314,6 +1314,16 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 		ipWhitelist = "127.0.0.1"
 	}
 
+	// Step 5.1: 安装ipset包（内部已校验是否已安装，已安装则跳过）
+	if err := installIpsetPackage(client, distroInfo.PackageManager, callback); err != nil {
+		log.Printf("[Firewall] 安装ipset包失败: %v", err)
+		return &ConfigResult{
+			Success: false,
+			Command: "",
+			Output:  fmt.Sprintf("安装ipset包失败: %v", err),
+		}, nil
+	}
+
 	if err := manageIpset(client, port, ipWhitelist, callback); err != nil {
 		log.Printf("[Firewall] 管理ipset白名单失败: %v", err)
 		return &ConfigResult{
