@@ -4,7 +4,9 @@ import (
 	"access-control-tool/internal/models"
 	"fmt"
 	"log"
+	"net"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -511,11 +513,21 @@ func configureWhitelistFilters(client WinRMClient, port int, ipWhitelist string,
 			continue
 		}
 
-		tcpKey := fmt.Sprintf("%s/TCP/%d", ip, port)
-		udpKey := fmt.Sprintf("%s/UDP/%d", ip, port)
+		addr, mask, keyPart, isSubnet, err := splitWhitelistEntry(ip)
+		if err != nil {
+			log.Printf("[Firewall] 白名单项无效(%s): %v", ip, err)
+			writeOutput(fmt.Sprintf("❌ 白名单项无效(%s): %v\n", ip, err))
+			return fmt.Errorf("白名单项无效(%s): %v", ip, err)
+		}
+
+		tcpKey := fmt.Sprintf("%s/TCP/%d", keyPart, port)
+		udpKey := fmt.Sprintf("%s/UDP/%d", keyPart, port)
 
 		if !containsIP(existingIPs, tcpKey) {
-			allowFilterCmdTCP := fmt.Sprintf(`netsh ipsec static add filter filterlist="%s" srcaddr=%s dstaddr=me dstport=%d protocol=TCP`, allowListName, ip, port)
+			allowFilterCmdTCP := fmt.Sprintf(`netsh ipsec static add filter filterlist="%s" srcaddr=%s dstaddr=me dstport=%d protocol=TCP`, allowListName, addr, port)
+			if isSubnet {
+				allowFilterCmdTCP = fmt.Sprintf(`netsh ipsec static add filter filterlist="%s" srcaddr=%s srcmask=%s dstaddr=me dstport=%d protocol=TCP`, allowListName, addr, mask, port)
+			}
 			_, err := client.Execute(allowFilterCmdTCP)
 			if err != nil {
 				log.Printf("[Firewall] 添加白名单筛选器失败(%s,TCP): %v", ip, err)
@@ -529,7 +541,10 @@ func configureWhitelistFilters(client WinRMClient, port int, ipWhitelist string,
 		}
 
 		if !containsIP(existingIPs, udpKey) {
-			allowFilterCmdUDP := fmt.Sprintf(`netsh ipsec static add filter filterlist="%s" srcaddr=%s dstaddr=me dstport=%d protocol=UDP`, allowListName, ip, port)
+			allowFilterCmdUDP := fmt.Sprintf(`netsh ipsec static add filter filterlist="%s" srcaddr=%s dstaddr=me dstport=%d protocol=UDP`, allowListName, addr, port)
+			if isSubnet {
+				allowFilterCmdUDP = fmt.Sprintf(`netsh ipsec static add filter filterlist="%s" srcaddr=%s srcmask=%s dstaddr=me dstport=%d protocol=UDP`, allowListName, addr, mask, port)
+			}
 			_, err := client.Execute(allowFilterCmdUDP)
 			if err != nil {
 				log.Printf("[Firewall] 添加白名单筛选器失败(%s,UDP): %v", ip, err)
@@ -881,14 +896,16 @@ func verifyPolicy(client WinRMClient, port int, ipWhitelist string, writeOutput 
 
 // parseIPsFromFilterList 解析netsh ipsec static show filterlist level=verbose输出
 // 提取源IP、协议、目标端口，格式化为 "IP/协议/端口"（如 "192.168.21.52/TCP/3389"）
+// 如果是子网段（源掩码不为255.255.255.255），格式化为 "IP/前缀长度/协议/端口"（如 "192.168.21.0/24/TCP/3389"）
 // 支持中英文输出格式
 // 参数: output - filterlist命令输出
-// 返回: IP列表（格式为 IP/协议/端口）
+// 返回: IP列表（格式为 IP/协议/端口 或 IP/前缀长度/协议/端口）
 func parseIPsFromFilterList(output string) []string {
 	var results []string
 	lines := strings.Split(output, "\n")
 
 	var currentIP string
+	var currentMask string
 	var currentProtocol string
 	var currentPort string
 
@@ -908,6 +925,14 @@ func parseIPsFromFilterList(output string) []string {
 			if len(parts) == 2 {
 				currentIP = strings.TrimSpace(parts[1])
 				log.Printf("[Firewall] parseIPsFromFilterList - 找到源IP: '%s'", currentIP)
+			}
+		}
+
+		if strings.Contains(line, "源掩码") || strings.Contains(line, "Source Mask") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				currentMask = strings.TrimSpace(parts[1])
+				log.Printf("[Firewall] parseIPsFromFilterList - 找到源掩码: '%s'", currentMask)
 			}
 		}
 
@@ -931,10 +956,22 @@ func parseIPsFromFilterList(output string) []string {
 					currentIP = "any"
 				}
 				if currentIP != "Me" && currentIP != "me" && currentIP != "<我的 IP 地址>" {
-					results = append(results, fmt.Sprintf("%s/%s/%s", currentIP, currentProtocol, currentPort))
-					log.Printf("[Firewall] parseIPsFromFilterList - 添加结果: '%s/%s/%s'", currentIP, currentProtocol, currentPort)
+					if currentMask != "" && currentMask != "255.255.255.255" {
+						prefix := maskToPrefixLen(currentMask)
+						if prefix != "" {
+							results = append(results, fmt.Sprintf("%s/%s/%s/%s", currentIP, prefix, currentProtocol, currentPort))
+							log.Printf("[Firewall] parseIPsFromFilterList - 添加子网结果: '%s/%s/%s/%s'", currentIP, prefix, currentProtocol, currentPort)
+						} else {
+							results = append(results, fmt.Sprintf("%s/%s/%s/%s", currentIP, currentMask, currentProtocol, currentPort))
+							log.Printf("[Firewall] parseIPsFromFilterList - 添加子网结果(原始掩码): '%s/%s/%s/%s'", currentIP, currentMask, currentProtocol, currentPort)
+						}
+					} else {
+						results = append(results, fmt.Sprintf("%s/%s/%s", currentIP, currentProtocol, currentPort))
+						log.Printf("[Firewall] parseIPsFromFilterList - 添加结果: '%s/%s/%s'", currentIP, currentProtocol, currentPort)
+					}
 				}
 				currentIP = ""
+				currentMask = ""
 				currentProtocol = ""
 				currentPort = ""
 			}
@@ -970,6 +1007,70 @@ func normalizeProtocol(proto string) string {
 	default:
 		return proto
 	}
+}
+
+// splitWhitelistEntry 解析单个白名单条目，支持单个IP地址和IP子网段(CIDR)
+// 参数: entry - 白名单条目，如 "192.168.21.52" 或 "192.168.21.0/24"
+// 返回:
+//
+//	addr     - 源地址（单个IP时为其本身，子网段时为网段地址）
+//	mask     - 子网掩码（单个IP时为255.255.255.255，子网段时为对应掩码）
+//	keyPart  - 用于去重/存在性判断的键（单个IP为其本身，子网段为"网段/前缀长度"）
+//	isSubnet - 是否为子网段
+//	err      - 解析错误
+func splitWhitelistEntry(entry string) (addr string, mask string, keyPart string, isSubnet bool, err error) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return "", "", "", false, fmt.Errorf("白名单项为空")
+	}
+
+	if strings.Contains(entry, "/") {
+		ipPart, prefixPart, found := strings.Cut(entry, "/")
+		if !found {
+			return "", "", "", false, fmt.Errorf("无效的IP子网段: %s", entry)
+		}
+		ip := net.ParseIP(strings.TrimSpace(ipPart))
+		if ip == nil {
+			return "", "", "", false, fmt.Errorf("无效的IP地址: %s", entry)
+		}
+		ip4 := ip.To4()
+		if ip4 == nil {
+			return "", "", "", false, fmt.Errorf("仅支持IPv4子网段: %s", entry)
+		}
+		prefixLen, err := strconv.Atoi(strings.TrimSpace(prefixPart))
+		if err != nil || prefixLen < 0 || prefixLen > 32 {
+			return "", "", "", false, fmt.Errorf("无效的子网前缀长度: %s", entry)
+		}
+		cidrMask := net.CIDRMask(prefixLen, 32)
+		return ip4.String(), fmt.Sprintf("%d.%d.%d.%d", cidrMask[0], cidrMask[1], cidrMask[2], cidrMask[3]),
+			fmt.Sprintf("%s/%d", ip4.String(), prefixLen), true, nil
+	}
+
+	ip := net.ParseIP(entry)
+	if ip == nil {
+		return "", "", "", false, fmt.Errorf("无效的IP地址: %s", entry)
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return "", "", "", false, fmt.Errorf("仅支持IPv4地址: %s", entry)
+	}
+	return ip4.String(), "255.255.255.255", ip4.String(), false, nil
+}
+
+// maskToPrefixLen 将点分十进制子网掩码转换为CIDR前缀长度
+// 如 "255.255.255.0" -> "24"；非法掩码返回空字符串
+// 参数: mask - 点分十进制掩码
+// 返回: 前缀长度字符串
+func maskToPrefixLen(mask string) string {
+	ip := net.ParseIP(strings.TrimSpace(mask))
+	if ip == nil || ip.To4() == nil {
+		return ""
+	}
+	ones, bits := net.IPMask(ip.To4()).Size()
+	if bits == 0 {
+		return ""
+	}
+	return strconv.Itoa(ones)
 }
 
 // removeDuplicateFilters 删除筛选器列表中的重复筛选器
@@ -1185,13 +1286,23 @@ func deconfigureWhitelistIPs(client WinRMClient, port int, ipWhitelist string, a
 			continue
 		}
 
-		tcpKey := fmt.Sprintf("%s/TCP/%d", ip, port)
-		udpKey := fmt.Sprintf("%s/UDP/%d", ip, port)
+		addr, mask, keyPart, isSubnet, err := splitWhitelistEntry(ip)
+		if err != nil {
+			log.Printf("[Firewall] 白名单项无效(%s): %v", ip, err)
+			writeOutput(fmt.Sprintf("❌ 白名单项无效(%s): %v\n", ip, err))
+			return fmt.Errorf("白名单项无效(%s): %v", ip, err)
+		}
+
+		tcpKey := fmt.Sprintf("%s/TCP/%d", keyPart, port)
+		udpKey := fmt.Sprintf("%s/UDP/%d", keyPart, port)
 
 		if !containsIP(existingIPs, tcpKey) {
 			writeOutput(fmt.Sprintf("⏭️ 白名单IP(%s,TCP)不存在，跳过\n", ip))
 		} else {
-			deleteFilterCmdTCP := fmt.Sprintf(`netsh ipsec static delete filter filterlist="%s" srcaddr=%s dstaddr=me dstport=%d protocol=TCP`, allowFilterListName, ip, port)
+			deleteFilterCmdTCP := fmt.Sprintf(`netsh ipsec static delete filter filterlist="%s" srcaddr=%s dstaddr=me dstport=%d protocol=TCP`, allowFilterListName, addr, port)
+			if isSubnet {
+				deleteFilterCmdTCP = fmt.Sprintf(`netsh ipsec static delete filter filterlist="%s" srcaddr=%s srcmask=%s dstaddr=me dstport=%d protocol=TCP`, allowFilterListName, addr, mask, port)
+			}
 			_, err := client.Execute(deleteFilterCmdTCP)
 			if err != nil {
 				log.Printf("[Firewall] 删除白名单IP失败(%s,TCP): %v", ip, err)
@@ -1205,7 +1316,10 @@ func deconfigureWhitelistIPs(client WinRMClient, port int, ipWhitelist string, a
 		if !containsIP(existingIPs, udpKey) {
 			writeOutput(fmt.Sprintf("⏭️ 白名单IP(%s,UDP)不存在，跳过\n", ip))
 		} else {
-			deleteFilterCmdUDP := fmt.Sprintf(`netsh ipsec static delete filter filterlist="%s" srcaddr=%s dstaddr=me dstport=%d protocol=UDP`, allowFilterListName, ip, port)
+			deleteFilterCmdUDP := fmt.Sprintf(`netsh ipsec static delete filter filterlist="%s" srcaddr=%s dstaddr=me dstport=%d protocol=UDP`, allowFilterListName, addr, port)
+			if isSubnet {
+				deleteFilterCmdUDP = fmt.Sprintf(`netsh ipsec static delete filter filterlist="%s" srcaddr=%s srcmask=%s dstaddr=me dstport=%d protocol=UDP`, allowFilterListName, addr, mask, port)
+			}
 			_, err = client.Execute(deleteFilterCmdUDP)
 			if err != nil {
 				log.Printf("[Firewall] 删除白名单IP失败(%s,UDP): %v", ip, err)
@@ -1384,8 +1498,15 @@ func verifyDeconfigureWhitelist(client WinRMClient, port int, ipWhitelist string
 			continue
 		}
 
-		tcpKey := fmt.Sprintf("%s/TCP/%d", ip, port)
-		udpKey := fmt.Sprintf("%s/UDP/%d", ip, port)
+		_, _, keyPart, _, err := splitWhitelistEntry(ip)
+		if err != nil {
+			log.Printf("[Firewall] 白名单项无效(%s): %v", ip, err)
+			writeOutput(fmt.Sprintf("❌ 白名单项无效(%s): %v\n", ip, err))
+			return fmt.Errorf("白名单项无效(%s): %v", ip, err)
+		}
+
+		tcpKey := fmt.Sprintf("%s/TCP/%d", keyPart, port)
+		udpKey := fmt.Sprintf("%s/UDP/%d", keyPart, port)
 
 		if containsIP(allowIPs, tcpKey) {
 			log.Printf("[Firewall] 白名单IP(%s,TCP)仍存在", ip)
