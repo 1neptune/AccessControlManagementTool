@@ -390,6 +390,9 @@ func addConnectedIP(portMap map[string]*PortInfo, protocol string, localPort int
 		}
 	}
 
+	// 处理IPv4映射IPv6地址（IPv4-Mapped IPv6），如 ::ffff:192.168.21.52 -> 192.168.21.52
+	remoteIP = strings.TrimPrefix(remoteIP, "::ffff:")
+
 	for _, ip := range portMap[key].ConnectedIPs {
 		if ip == remoteIP {
 			return
@@ -540,6 +543,14 @@ func appendPortConnectedIP(localPortStr, remoteIP string, port int, connectedIPs
 		if start < end {
 			remoteIP = remoteIP[start:end]
 		}
+	}
+
+	// 处理IPv4映射IPv6地址（IPv4-Mapped IPv6），如 ::ffff:192.168.21.52 -> 192.168.21.52
+	remoteIP = strings.TrimPrefix(remoteIP, "::ffff:")
+
+	// 可能映射地址为通配/回环，再次过滤
+	if remoteIP == "127.0.0.1" || remoteIP == "0.0.0.0" {
+		return
 	}
 	*connectedIPs = append(*connectedIPs, remoteIP)
 	seenIPs[remoteIP] = true
