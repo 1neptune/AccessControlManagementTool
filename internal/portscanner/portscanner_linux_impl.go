@@ -284,51 +284,85 @@ func isLoopbackAddress(ip string) bool {
 //	ss -tn: ESTAB 0 0 172.19.6.75:22 192.168.21.52:57436
 //	netstat -tn: tcp 0 0 192.168.3.47:46422 192.168.21.52:58155 ESTABLISHED
 func fetchConnectedIPs(client *ssh.Client, portMap map[string]*PortInfo) error {
-	output, err := client.Execute("ss -tn 2>/dev/null || netstat -tn 2>/dev/null")
+	// 分别扫描TCP和UDP已建立连接（UDP仅匹配已与对端建立关联的socket）
+	tcpOutput, err := client.Execute("ss -tn 2>/dev/null || netstat -tn 2>/dev/null")
 	if err != nil {
 		return err
 	}
+	log.Printf("[PortScanner] TCP连接状态输出长度: %d 字节", len(tcpOutput))
 
-	log.Printf("[PortScanner] 连接状态输出长度: %d 字节", len(output))
+	udpOutput, err := client.Execute("ss -un 2>/dev/null || netstat -un 2>/dev/null")
+	if err != nil {
+		log.Printf("[PortScanner] UDP连接状态获取失败: %v", err)
+	}
+	log.Printf("[PortScanner] UDP连接状态输出长度: %d 字节", len(udpOutput))
 
+	parseConnections(tcpOutput, "tcp", portMap)
+	parseConnections(udpOutput, "udp", portMap)
+
+	return nil
+}
+
+// parseConnections 解析已建立连接的命令输出，将远端客户端IP加入portMap对应端口
+// 参数:
+//
+//	output   - 命令输出内容（ss或netstat格式）
+//	protocol - 协议类型（tcp/udp）
+//	portMap  - 端口信息映射表（key为"协议/端口号"）
+//
+// 支持的输出格式:
+//
+//	ss:
+//	  ESTAB 0 0 192.168.30.63:1521 192.168.30.54:50582
+//	  ESTAB 0 0 [::1]:1521 [::1]:50582
+//	netstat tcp:
+//	  tcp  0 0 192.168.30.63:1521 192.168.30.54:50582 ESTABLISHED 2471393/oracleV80
+//	  tcp6 0 0 192.168.30.63:1521 192.168.30.54:50582 ESTABLISHED 2471393/oracleV80
+//	netstat udp:
+//	  udp  0 0 192.168.30.63:1521 192.168.30.54:50582
+//	  udp6 0 0 192.168.30.63:1521 192.168.30.54:50582
+func parseConnections(output string, protocol string, portMap map[string]*PortInfo) {
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "State") || strings.HasPrefix(line, "Active") {
 			continue
 		}
 
-		log.Printf("[PortScanner] 处理连接行: %s", line)
+		log.Printf("[PortScanner] 处理%s连接行: %s", protocol, line)
 
-		// 匹配ss命令格式: ESTAB 0 0 172.19.6.75:22 192.168.21.52:57436
-		reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+([0-9a-f.:]+):(\d+)\s+([0-9a-f.:]+):(\d+)`)
-		if matches := reSS.FindStringSubmatch(line); len(matches) == 5 {
-			log.Printf("[PortScanner] ss格式匹配成功: local=%s:%s, remote=%s:%s", matches[1], matches[2], matches[3], matches[4])
-			localPort, err := strconv.Atoi(matches[2])
-			if err != nil {
+		// 通用地址匹配：本地地址(IP:端口) 远端地址(IP:端口)
+		// 兼容IPv4/IPv6（IPv6地址带[]，如[::1]:1521）
+		addrRe := `([0-9a-fA-F:.]+|\[[0-9a-fA-F:.]+\]):(\d+)\s+([0-9a-fA-F:.]+|\[[0-9a-fA-F:.]+\]):(\d+)`
+
+		var re *regexp.Regexp
+		if protocol == "tcp" {
+			// 匹配ss命令格式: ESTAB 0 0 local remote（TCP状态固定为ESTAB）
+			reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+` + addrRe)
+			if matches := reSS.FindStringSubmatch(line); len(matches) == 6 {
+				localPort, _ := strconv.Atoi(matches[3])
+				addConnectedIP(portMap, protocol, localPort, matches[5])
 				continue
 			}
-			remoteIP := matches[3]
-			addConnectedIP(portMap, "tcp", localPort, remoteIP)
-			continue
-		}
-
-		// 匹配netstat命令格式: tcp 0 0 192.168.3.47:46422 192.168.21.52:58155 ESTABLISHED
-		reNetstat := regexp.MustCompile(`tcp(?:6)?\s+\d+\s+\d+\s+([0-9a-f.:]+):(\d+)\s+([0-9a-f.:]+):(\d+)\s+ESTABLISHED`)
-		if matches := reNetstat.FindStringSubmatch(line); len(matches) == 6 {
-			log.Printf("[PortScanner] netstat格式匹配成功: local=%s:%s, remote=%s:%s", matches[1], matches[2], matches[3], matches[4])
-			localPort, err := strconv.Atoi(matches[2])
-			if err != nil {
+			// 匹配netstat命令格式: tcp[6] 0 0 local remote ESTABLISHED pid/proc
+			re = regexp.MustCompile(`tcp(?:6)?\s+\d+\s+\d+\s+` + addrRe + `\s+ESTABLISHED`)
+		} else {
+			// 匹配ss命令格式: ESTAB 0 0 local remote（UDP有对端时状态为ESTAB）
+			reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+` + addrRe)
+			if matches := reSS.FindStringSubmatch(line); len(matches) == 6 {
+				localPort, _ := strconv.Atoi(matches[3])
+				addConnectedIP(portMap, protocol, localPort, matches[5])
 				continue
 			}
-			remoteIP := matches[3]
-			addConnectedIP(portMap, "tcp", localPort, remoteIP)
-			continue
+			// 匹配netstat命令格式: udp[6] 0 0 local remote [ESTABLISHED] pid/proc
+			// UDP未建立关联时无状态列且远端为0.0.0.0:*，无法匹配(\d+)，自然跳过
+			re = regexp.MustCompile(`udp(?:6)?\s+\d+\s+\d+\s+` + addrRe)
 		}
 
-		log.Printf("[PortScanner] 未匹配到连接行格式")
+		if matches := re.FindStringSubmatch(line); len(matches) == 6 {
+			localPort, _ := strconv.Atoi(matches[3])
+			addConnectedIP(portMap, protocol, localPort, matches[5])
+		}
 	}
-
-	return nil
 }
 
 // addConnectedIP 将远程客户端IP添加到端口的ConnectedIPs列表中（去重）
@@ -395,7 +429,7 @@ func refreshConnectedIPsLinux(server *models.Server, port int) ([]string, error)
 //   - 用于配置窗口切换端口时快速刷新关联业务IP
 //   - 避免重新扫描所有端口，提高性能
 func GetConnectedIPsForPort(server *models.Server, port int) ([]string, error) {
-	log.Printf("[PortScanner] 获取端口 %d 的连接IP", port)
+	log.Printf("[PortScanner] 获取端口 %d (TCP/UDP) 的连接IP", port)
 
 	client, err := ssh.NewClient(server)
 	if err != nil {
@@ -404,16 +438,44 @@ func GetConnectedIPsForPort(server *models.Server, port int) ([]string, error) {
 	}
 	defer client.Close()
 
-	output, err := client.Execute("ss -tn 2>/dev/null || netstat -tn 2>/dev/null")
+	// 分别扫描TCP和UDP已建立连接
+	tcpOutput, err := client.Execute("ss -tn 2>/dev/null || netstat -tn 2>/dev/null")
 	if err != nil {
 		log.Printf("[PortScanner] 执行命令失败: %v", err)
 		return nil, err
 	}
 
-	log.Printf("[PortScanner] 连接状态输出长度: %d 字节", len(output))
+	udpOutput, err := client.Execute("ss -un 2>/dev/null || netstat -un 2>/dev/null")
+	if err != nil {
+		log.Printf("[PortScanner] UDP连接状态获取失败: %v", err)
+	}
+
+	log.Printf("[PortScanner] TCP连接状态输出长度: %d 字节, UDP连接状态输出长度: %d 字节", len(tcpOutput), len(udpOutput))
 
 	connectedIPs := make([]string, 0)
 	seenIPs := make(map[string]bool)
+
+	// 解析TCP连接（ss格式 + netstat tcp/tcp6格式）
+	parsePortConnections(tcpOutput, "tcp", port, &connectedIPs, seenIPs)
+	// 解析UDP连接（ss格式 + netstat udp/udp6格式）
+	parsePortConnections(udpOutput, "udp", port, &connectedIPs, seenIPs)
+
+	log.Printf("[PortScanner] 端口 %d 发现 %d 个连接IP", port, len(connectedIPs))
+	return connectedIPs, nil
+}
+
+// parsePortConnections 解析指定端口的已建立连接客户端IP（支持TCP/UDP及其IPv6形式）
+// 参数:
+//
+//	output       - 命令输出内容（ss或netstat格式）
+//	protocol     - 协议类型（tcp/udp）
+//	port         - 目标端口号
+//	connectedIPs - 客户端IP列表（会去重追加）
+//	seenIPs      - 已出现IP集合
+func parsePortConnections(output string, protocol string, port int, connectedIPs *[]string, seenIPs map[string]bool) {
+	// 通用地址匹配：本地地址(IP:端口) 远端地址(IP:端口)
+	// 兼容IPv4/IPv6（IPv6地址带[]，如[::1]:1521）
+	addrRe := `([0-9a-fA-F:.]+|\[[0-9a-fA-F:.]+\]):(\d+)\s+([0-9a-fA-F:.]+|\[[0-9a-fA-F:.]+\]):(\d+)`
 
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
@@ -421,69 +483,66 @@ func GetConnectedIPsForPort(server *models.Server, port int) ([]string, error) {
 			continue
 		}
 
-		log.Printf("[PortScanner] 处理连接行: %s", line)
+		log.Printf("[PortScanner] 处理%s连接行: %s", protocol, line)
 
-		reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+([0-9a-f.:]+):(\d+)\s+([0-9a-f.:]+):(\d+)`)
-		if matches := reSS.FindStringSubmatch(line); len(matches) == 5 {
-			log.Printf("[PortScanner] ss格式匹配成功: local=%s:%s, remote=%s:%s", matches[1], matches[2], matches[3], matches[4])
-			localPort, err := strconv.Atoi(matches[2])
-			if err != nil {
+		var re *regexp.Regexp
+		if protocol == "tcp" {
+			// ss格式: ESTAB 0 0 local remote
+			reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+` + addrRe)
+			if matches := reSS.FindStringSubmatch(line); len(matches) == 6 {
+				appendPortConnectedIP(matches[3], matches[5], port, connectedIPs, seenIPs)
 				continue
 			}
-			if localPort != port {
+			// netstat格式: tcp[6] 0 0 local remote ESTABLISHED pid/proc
+			re = regexp.MustCompile(`tcp(?:6)?\s+\d+\s+\d+\s+` + addrRe + `\s+ESTABLISHED`)
+		} else {
+			// ss格式: ESTAB 0 0 local remote（UDP有对端时状态为ESTAB）
+			reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+` + addrRe)
+			if matches := reSS.FindStringSubmatch(line); len(matches) == 6 {
+				appendPortConnectedIP(matches[3], matches[5], port, connectedIPs, seenIPs)
 				continue
 			}
-			remoteIP := matches[3]
-			if seenIPs[remoteIP] {
-				continue
-			}
-			if strings.HasPrefix(remoteIP, "[::1]") || remoteIP == "127.0.0.1" || remoteIP == "::1" {
-				continue
-			}
-			if strings.Contains(remoteIP, "[") && strings.Contains(remoteIP, "]") {
-				start := strings.Index(remoteIP, "[") + 1
-				end := strings.Index(remoteIP, "]")
-				if start < end {
-					remoteIP = remoteIP[start:end]
-				}
-			}
-			connectedIPs = append(connectedIPs, remoteIP)
-			seenIPs[remoteIP] = true
-			continue
+			// netstat格式: udp[6] 0 0 local remote [ESTABLISHED] pid/proc
+			re = regexp.MustCompile(`udp(?:6)?\s+\d+\s+\d+\s+` + addrRe)
 		}
 
-		reNetstat := regexp.MustCompile(`tcp(?:6)?\s+\d+\s+\d+\s+([0-9a-f.:]+):(\d+)\s+([0-9a-f.:]+):(\d+)\s+ESTABLISHED`)
-		if matches := reNetstat.FindStringSubmatch(line); len(matches) == 6 {
-			log.Printf("[PortScanner] netstat格式匹配成功: local=%s:%s, remote=%s:%s", matches[1], matches[2], matches[3], matches[4])
-			localPort, err := strconv.Atoi(matches[2])
-			if err != nil {
-				continue
-			}
-			if localPort != port {
-				continue
-			}
-			remoteIP := matches[3]
-			if seenIPs[remoteIP] {
-				continue
-			}
-			if strings.HasPrefix(remoteIP, "[::1]") || remoteIP == "127.0.0.1" || remoteIP == "::1" {
-				continue
-			}
-			if strings.Contains(remoteIP, "[") && strings.Contains(remoteIP, "]") {
-				start := strings.Index(remoteIP, "[") + 1
-				end := strings.Index(remoteIP, "]")
-				if start < end {
-					remoteIP = remoteIP[start:end]
-				}
-			}
-			connectedIPs = append(connectedIPs, remoteIP)
-			seenIPs[remoteIP] = true
-			continue
+		if matches := re.FindStringSubmatch(line); len(matches) == 6 {
+			appendPortConnectedIP(matches[3], matches[5], port, connectedIPs, seenIPs)
 		}
 	}
+}
 
-	log.Printf("[PortScanner] 端口 %d 发现 %d 个连接IP", port, len(connectedIPs))
-	return connectedIPs, nil
+// appendPortConnectedIP 将匹配到的连接行中的远端IP追加到列表（校验端口并去重）
+// 参数:
+//
+//	localPortStr - 本地端口字符串
+//	remoteIP     - 远端IP（可能带方括号）
+//	port         - 目标端口号
+//	connectedIPs - 客户端IP列表
+//	seenIPs      - 已出现IP集合
+func appendPortConnectedIP(localPortStr, remoteIP string, port int, connectedIPs *[]string, seenIPs map[string]bool) {
+	localPort, err := strconv.Atoi(localPortStr)
+	if err != nil {
+		return
+	}
+	if localPort != port {
+		return
+	}
+	if seenIPs[remoteIP] {
+		return
+	}
+	if strings.HasPrefix(remoteIP, "[::1]") || remoteIP == "127.0.0.1" || remoteIP == "::1" {
+		return
+	}
+	if strings.Contains(remoteIP, "[") && strings.Contains(remoteIP, "]") {
+		start := strings.Index(remoteIP, "[") + 1
+		end := strings.Index(remoteIP, "]")
+		if start < end {
+			remoteIP = remoteIP[start:end]
+		}
+	}
+	*connectedIPs = append(*connectedIPs, remoteIP)
+	seenIPs[remoteIP] = true
 }
 
 // processPortLine 处理端口行，提取端口号、协议和服务名称
