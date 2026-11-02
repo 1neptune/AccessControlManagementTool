@@ -338,9 +338,9 @@ func parseConnections(output string, protocol string, portMap map[string]*PortIn
 		if protocol == "tcp" {
 			// 匹配ss命令格式: ESTAB 0 0 local remote（TCP状态固定为ESTAB）
 			reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+` + addrRe)
-			if matches := reSS.FindStringSubmatch(line); len(matches) == 6 {
-				localPort, _ := strconv.Atoi(matches[3])
-				addConnectedIP(portMap, protocol, localPort, matches[5])
+			if matches := reSS.FindStringSubmatch(line); len(matches) == 5 {
+				localPort, _ := strconv.Atoi(matches[2])
+				addConnectedIP(portMap, protocol, localPort, matches[3])
 				continue
 			}
 			// 匹配netstat命令格式: tcp[6] 0 0 local remote ESTABLISHED pid/proc
@@ -348,9 +348,9 @@ func parseConnections(output string, protocol string, portMap map[string]*PortIn
 		} else {
 			// 匹配ss命令格式: ESTAB 0 0 local remote（UDP有对端时状态为ESTAB）
 			reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+` + addrRe)
-			if matches := reSS.FindStringSubmatch(line); len(matches) == 6 {
-				localPort, _ := strconv.Atoi(matches[3])
-				addConnectedIP(portMap, protocol, localPort, matches[5])
+			if matches := reSS.FindStringSubmatch(line); len(matches) == 5 {
+				localPort, _ := strconv.Atoi(matches[2])
+				addConnectedIP(portMap, protocol, localPort, matches[3])
 				continue
 			}
 			// 匹配netstat命令格式: udp[6] 0 0 local remote [ESTABLISHED] pid/proc
@@ -358,9 +358,9 @@ func parseConnections(output string, protocol string, portMap map[string]*PortIn
 			re = regexp.MustCompile(`udp(?:6)?\s+\d+\s+\d+\s+` + addrRe)
 		}
 
-		if matches := re.FindStringSubmatch(line); len(matches) == 6 {
-			localPort, _ := strconv.Atoi(matches[3])
-			addConnectedIP(portMap, protocol, localPort, matches[5])
+		if matches := re.FindStringSubmatch(line); len(matches) == 5 {
+			localPort, _ := strconv.Atoi(matches[2])
+			addConnectedIP(portMap, protocol, localPort, matches[3])
 		}
 	}
 }
@@ -378,7 +378,7 @@ func addConnectedIP(portMap map[string]*PortInfo, protocol string, localPort int
 		return
 	}
 
-	if strings.HasPrefix(remoteIP, "[::1]") || remoteIP == "127.0.0.1" || remoteIP == "::1" {
+	if strings.HasPrefix(remoteIP, "[::1]") || remoteIP == "127.0.0.1" || remoteIP == "::1" || remoteIP == "0.0.0.0" || remoteIP == "::" || remoteIP == "*" {
 		return
 	}
 
@@ -489,8 +489,8 @@ func parsePortConnections(output string, protocol string, port int, connectedIPs
 		if protocol == "tcp" {
 			// ss格式: ESTAB 0 0 local remote
 			reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+` + addrRe)
-			if matches := reSS.FindStringSubmatch(line); len(matches) == 6 {
-				appendPortConnectedIP(matches[3], matches[5], port, connectedIPs, seenIPs)
+			if matches := reSS.FindStringSubmatch(line); len(matches) == 5 {
+				appendPortConnectedIP(matches[2], matches[3], port, connectedIPs, seenIPs)
 				continue
 			}
 			// netstat格式: tcp[6] 0 0 local remote ESTABLISHED pid/proc
@@ -498,16 +498,16 @@ func parsePortConnections(output string, protocol string, port int, connectedIPs
 		} else {
 			// ss格式: ESTAB 0 0 local remote（UDP有对端时状态为ESTAB）
 			reSS := regexp.MustCompile(`ESTAB(?:LISHED)?\s+\d+\s+\d+\s+` + addrRe)
-			if matches := reSS.FindStringSubmatch(line); len(matches) == 6 {
-				appendPortConnectedIP(matches[3], matches[5], port, connectedIPs, seenIPs)
+			if matches := reSS.FindStringSubmatch(line); len(matches) == 5 {
+				appendPortConnectedIP(matches[2], matches[3], port, connectedIPs, seenIPs)
 				continue
 			}
 			// netstat格式: udp[6] 0 0 local remote [ESTABLISHED] pid/proc
 			re = regexp.MustCompile(`udp(?:6)?\s+\d+\s+\d+\s+` + addrRe)
 		}
 
-		if matches := re.FindStringSubmatch(line); len(matches) == 6 {
-			appendPortConnectedIP(matches[3], matches[5], port, connectedIPs, seenIPs)
+		if matches := re.FindStringSubmatch(line); len(matches) == 5 {
+			appendPortConnectedIP(matches[2], matches[3], port, connectedIPs, seenIPs)
 		}
 	}
 }
