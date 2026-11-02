@@ -220,7 +220,7 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 	portSelect.OnChanged = func(s string) {
 		portStr, protocol := parsePortOption(s)
 		if protocol != "" {
-			cw.protocol = protocol
+			cw.protocol = strings.ToLower(protocol)
 		}
 		log.Printf("[ConfigWindow] 端口下拉框联动 - 端口: %s, 协议: %s", portStr, protocol)
 		portEntry.SetText(portStr)
