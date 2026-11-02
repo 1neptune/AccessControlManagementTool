@@ -23,6 +23,7 @@ type ConfigWindow struct {
 	server      *models.Server              // 当前配置的服务器信息
 	parent      fyne.Window                 // 父窗口引用
 	portInfoMap map[int]portscanner.PortInfo // 端口信息映射表，key为端口号，value为端口详细信息
+	protocol    string                      // 当前配置的协议（tcp/udp），从端口下拉框联动
 	configuring bool                        // 配置状态标志，防止重复点击按钮
 }
 
@@ -38,6 +39,7 @@ func NewConfigWindow(app fyne.App, parent fyne.Window) *ConfigWindow {
 		app:         app,
 		parent:      parent,
 		portInfoMap: make(map[int]portscanner.PortInfo),
+		protocol:    "tcp",
 	}
 }
 
@@ -212,12 +214,17 @@ func (cw *ConfigWindow) Show(server models.Server, onClosed func()) {
 	portEntryField := container.NewStack(portEntryBorder, portEntry)
 
 	// 下拉框选择同步逻辑：
-	// 当用户从下拉框选择端口时，自动将选中值填入端口输入框，
-	// 并触发handlePortSelect填充服务名称和关联业务IP。
-	// 这样下拉框和输入框保持同步，且配置时以输入框值为准。
+	// 当用户从下拉框选择端口时，自动将选中值（格式"端口/协议"，如"22/TCP"）拆分：
+	//   - 端口号填入端口输入框
+	//   - 协议类型记录到cw.protocol，供配置/取消配置时传入防火墙
 	portSelect.OnChanged = func(s string) {
-		portEntry.SetText(s)
-		cw.handlePortSelect(s, serviceNameEntry, businessIPEntry, ipEntry)
+		portStr, protocol := parsePortOption(s)
+		if protocol != "" {
+			cw.protocol = protocol
+		}
+		log.Printf("[ConfigWindow] 端口下拉框联动 - 端口: %s, 协议: %s", portStr, protocol)
+		portEntry.SetText(portStr)
+		cw.handlePortSelect(portStr, serviceNameEntry, businessIPEntry, ipEntry)
 	}
 	log.Printf("[ConfigWindow] 端口下拉框和输入框创建完成，下拉框宽度=%.2f, 输入框宽度=%.2f", portFieldWidth, portFieldWidth)
 
@@ -479,12 +486,13 @@ func (cw *ConfigWindow) handlePortSelect(portStr string, serviceNameEntry, busin
 	})
 
 	// 异步获取服务名称和关联业务IP
-	go cw.refreshPortInfo(port, serviceNameEntry, businessIPEntry, ipEntry)
+	go cw.refreshPortInfo(port, cw.protocol, serviceNameEntry, businessIPEntry, ipEntry)
 }
 
 // refreshPortInfo 异步刷新端口的服务名称和关联业务IP
 // 参数:
 //   port - 端口号
+//   protocol - 协议类型（tcp/udp）
 //   serviceNameEntry - 服务名称输入框
 //   businessIPEntry - 关联业务IP输入框
 //   ipEntry - 自定义白名单输入框
@@ -492,8 +500,8 @@ func (cw *ConfigWindow) handlePortSelect(portStr string, serviceNameEntry, busin
 //   - 调用ScanPorts重新扫描获取最新的端口信息（包括服务名称和连接IP）
 //   - 更新portInfoMap中的数据
 //   - 更新UI显示最新的服务名称和关联业务IP
-func (cw *ConfigWindow) refreshPortInfo(port int, serviceNameEntry, businessIPEntry, ipEntry *widget.Entry) {
-	log.Printf("[ConfigWindow] 刷新端口 %d 的服务名称和关联业务IP", port)
+func (cw *ConfigWindow) refreshPortInfo(port int, protocol string, serviceNameEntry, businessIPEntry, ipEntry *widget.Entry) {
+	log.Printf("[ConfigWindow] 刷新端口 %d (%s) 的服务名称和关联业务IP", port, protocol)
 
 	portInfoList, err := portscanner.ScanPorts(cw.server)
 	if err != nil {
@@ -505,10 +513,11 @@ func (cw *ConfigWindow) refreshPortInfo(port int, serviceNameEntry, businessIPEn
 		return
 	}
 
-	// 查找当前端口的最新信息
+	// 查找当前端口对应协议的最新信息
+	// 同一端口可能同时存在TCP和UDP监听，按协议精确匹配
 	var latestInfo *portscanner.PortInfo
 	for _, info := range portInfoList {
-		if info.Port == port {
+		if info.Port == port && info.Protocol == protocol {
 			latestInfo = &info
 			break
 		}
@@ -589,7 +598,9 @@ func (cw *ConfigWindow) loadPorts(portSelect *widget.Select, portEntry *widget.E
 	cw.portInfoMap = make(map[int]portscanner.PortInfo)
 	portStrings := make([]string, 0, len(portInfoList))
 	for _, info := range portInfoList {
-		portStrings = append(portStrings, strconv.Itoa(info.Port))
+		// 下拉框选项格式："端口/协议"，如 "22/TCP"、"53/UDP"
+		// 同一端口同时存在TCP和UDP监听时分别展示，让用户可选择协议
+		portStrings = append(portStrings, fmt.Sprintf("%d/%s", info.Port, strings.ToUpper(info.Protocol)))
 		cw.portInfoMap[info.Port] = info
 	}
 
@@ -612,6 +623,29 @@ func (cw *ConfigWindow) loadPorts(portSelect *widget.Select, portEntry *widget.E
 			businessIPEntry.SetText("无")
 		}
 	})
+}
+
+// parsePortOption 解析端口下拉框选项
+// 下拉框选项格式为 "端口/协议"（如 "22/TCP"、"53/UDP"）
+// 兼容旧格式：纯端口号（如 "22"），此时协议返回空字符串
+// 参数: option - 下拉框选项文本
+// 返回: 端口字符串和协议（大写的TCP/UDP，未识别返回空）
+func parsePortOption(option string) (string, string) {
+	option = strings.TrimSpace(option)
+	if option == "" {
+		return "", ""
+	}
+	parts := strings.Split(option, "/")
+	if len(parts) != 2 {
+		// 兼容无协议后缀的格式
+		return option, ""
+	}
+	port := strings.TrimSpace(parts[0])
+	protocol := strings.ToUpper(strings.TrimSpace(parts[1]))
+	if protocol == "TCP" || protocol == "UDP" {
+		return port, protocol
+	}
+	return option, ""
 }
 
 // configure 执行访问控制策略配置
@@ -736,7 +770,7 @@ func (cw *ConfigWindow) doConfigure(port int, ipWhitelist string, outputText *wi
 			}
 		}()
 
-		result, err := firewall.Configure(cw.server, port, ipWhitelist, progressCallback)
+		result, err := firewall.Configure(cw.server, port, ipWhitelist, cw.protocol, progressCallback)
 
 		fyne.Do(func() {
 			cw.configuring = false
@@ -1027,7 +1061,7 @@ func (cw *ConfigWindow) doDeconfigure(port int, ipWhitelist string, outputText *
 		}()
 
 		// 调用防火墙取消配置函数
-		err := firewall.Deconfigure(cw.server, port, ipWhitelist, progressCallback)
+		err := firewall.Deconfigure(cw.server, port, ipWhitelist, cw.protocol, progressCallback)
 
 		// 5. 取消配置完成，恢复UI状态
 		fyne.Do(func() {

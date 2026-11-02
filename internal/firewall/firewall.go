@@ -42,6 +42,7 @@ type WriteFunc func(message string)
 //   server - 服务器信息
 //   port - 要取消配置的端口
 //   ipWhitelist - IP白名单（空表示完整取消）
+//   protocol - 协议类型（tcp/udp）
 //   progressCallback - 可选的进度回调函数
 // 返回值:
 //   error - 操作过程中的错误
@@ -49,9 +50,9 @@ type WriteFunc func(message string)
 //   - 根据服务器操作系统类型选择不同的取消配置方式
 //   - Windows系统使用SMB客户端执行PowerShell命令
 //   - Linux系统使用SSH客户端执行iptables命令
-func Deconfigure(server *models.Server, port int, ipWhitelist string, progressCallback ...func(message string)) error {
-	log.Printf("[Firewall] 开始取消配置防火墙，服务器: %s:%d, 操作系统: %s, 端口: %d, IP白名单: '%s'",
-		server.Host, server.SSHPort, server.OSType, port, ipWhitelist)
+func Deconfigure(server *models.Server, port int, ipWhitelist string, protocol string, progressCallback ...func(message string)) error {
+	log.Printf("[Firewall] 开始取消配置防火墙，服务器: %s:%d, 操作系统: %s, 端口: %d, 协议: %s, IP白名单: '%s'",
+		server.Host, server.SSHPort, server.OSType, port, protocol, ipWhitelist)
 
 	var callback func(message string)
 	if len(progressCallback) > 0 {
@@ -101,7 +102,7 @@ func Deconfigure(server *models.Server, port int, ipWhitelist string, progressCa
 			}
 			return fmt.Errorf("发行版检测失败: %v", err)
 		}
-		if err := deconfigureLinux(client, port, ipWhitelist, distroInfo.IptablesSaveCommand, callback); err != nil {
+		if err := deconfigureLinux(client, port, ipWhitelist, protocol, distroInfo.IptablesSaveCommand, callback); err != nil {
 			log.Printf("[Firewall] 取消配置失败: %v", err)
 			return err
 		}
@@ -119,6 +120,7 @@ func Deconfigure(server *models.Server, port int, ipWhitelist string, progressCa
 //   server - 服务器信息
 //   port - 要配置的端口
 //   ipWhitelist - IP白名单（逗号分隔，空或"all"表示允许所有IP）
+//   protocol - 协议类型（tcp/udp）
 //   progressCallback - 可选的进度回调函数
 // 返回值:
 //   *ConfigResult - 配置结果
@@ -131,9 +133,9 @@ func Deconfigure(server *models.Server, port int, ipWhitelist string, progressCa
 //     * 自动检测包管理器：apt/yum/dnf/zypper
 //     * 自动停止firewalld/ufw并切换到iptables
 //     * Docker环境自动使用DOCKER-USER链
-func Configure(server *models.Server, port int, ipWhitelist string, progressCallback ...func(message string)) (*ConfigResult, error) {
-	log.Printf("[Firewall] 开始配置防火墙，服务器: %s:%d, 操作系统: %s, 端口: %d, IP白名单: '%s'",
-		server.Host, server.SSHPort, server.OSType, port, ipWhitelist)
+func Configure(server *models.Server, port int, ipWhitelist string, protocol string, progressCallback ...func(message string)) (*ConfigResult, error) {
+	log.Printf("[Firewall] 开始配置防火墙，服务器: %s:%d, 操作系统: %s, 端口: %d, 协议: %s, IP白名单: '%s'",
+		server.Host, server.SSHPort, server.OSType, port, protocol, ipWhitelist)
 
 	var callback func(message string)
 	if len(progressCallback) > 0 {
@@ -158,5 +160,5 @@ func Configure(server *models.Server, port int, ipWhitelist string, progressCall
 		return nil, err
 	}
 	defer client.Close()
-	return configureLinux(client, server, port, ipWhitelist, callback)
+	return configureLinux(client, server, port, ipWhitelist, protocol, callback)
 }

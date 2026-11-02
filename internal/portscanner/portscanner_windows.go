@@ -73,7 +73,7 @@ func scanWindowsPorts(client *smb.Client) ([]PortInfo, error) {
 		}
 
 		if portMap[port] == nil {
-			portMap[port] = &PortInfo{Port: port, ServiceName: "", ConnectedIPs: make([]string, 0)}
+			portMap[port] = &PortInfo{Port: port, Protocol: "tcp", ServiceName: "", ConnectedIPs: make([]string, 0)}
 		}
 
 		if state == "LISTENING" {

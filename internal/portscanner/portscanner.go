@@ -11,10 +11,12 @@ import (
 // 包含端口的基本信息和连接IP列表
 // 字段说明:
 //   Port - 端口号
+//   Protocol - 协议类型（tcp/udp）
 //   ServiceName - 服务名称（如sshd, nginx等）
 //   ConnectedIPs - 已连接的客户端IP列表
 type PortInfo struct {
 	Port         int      `json:"port"`
+	Protocol     string   `json:"protocol"`
 	ServiceName  string   `json:"service_name"`
 	ConnectedIPs []string `json:"connected_ips"`
 }

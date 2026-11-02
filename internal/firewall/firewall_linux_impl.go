@@ -976,6 +976,7 @@ func ensureDockerChains(client SSHClient, port int, callback func(message string
 //	client - SSH客户端
 //	port - 端口号
 //	ipWhitelist - IP白名单（逗号分隔）
+//	protocol - 协议类型（tcp/udp）
 //	isDocker - 是否为Docker服务
 //	callback - 进度回调函数
 //
@@ -985,17 +986,17 @@ func ensureDockerChains(client SSHClient, port int, callback func(message string
 //
 // 非Docker环境（INPUT链）:
 //
-//	iptables -A INPUT -p tcp --dport {port} -m set --match-set {port}_allow_ip src -j ACCEPT
-//	iptables -A INPUT -p tcp --dport {port} -j LOG --log-prefix "iptables-drop-{port}: "
-//	iptables -A INPUT -p tcp --dport {port} -j DROP
+//	iptables -A INPUT -p {protocol} --dport {port} -m set --match-set {port}_allow_ip src -j ACCEPT
+//	iptables -A INPUT -p {protocol} --dport {port} -j LOG --log-prefix "iptables-drop-{port}: "
+//	iptables -A INPUT -p {protocol} --dport {port} -j DROP
 //
 // Docker环境（DOCKER-USER链）:
 //
-//	iptables -I DOCKER-USER 1 -p tcp --dport {port} -m set --match-set {port}_allow_ip src -j ACCEPT
-//	iptables -I DOCKER-USER 2 -p tcp --dport {port} -j LOG --log-prefix "iptables-drop-{port}: "
-//	iptables -I DOCKER-USER 3 -p tcp --dport {port} -j DROP
-func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocker bool, callback func(message string)) error {
-	log.Printf("[Firewall] 创建iptables规则，端口: %d, Docker环境: %v", port, isDocker)
+//	iptables -I DOCKER-USER 1 -p {protocol} --dport {port} -m set --match-set {port}_allow_ip src -j ACCEPT
+//	iptables -I DOCKER-USER 2 -p {protocol} --dport {port} -j LOG --log-prefix "iptables-drop-{port}: "
+//	iptables -I DOCKER-USER 3 -p {protocol} --dport {port} -j DROP
+func createIptablesRules(client SSHClient, port int, ipWhitelist string, protocol string, isDocker bool, callback func(message string)) error {
+	log.Printf("[Firewall] 创建iptables规则，端口: %d, 协议: %s, Docker环境: %v", port, protocol, isDocker)
 
 	if callback != nil {
 		callback("🔧 创建iptables规则...\n")
@@ -1020,18 +1021,18 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 
 		rules = []ruleInfo{
 			{
-				checkCmd: fmt.Sprintf("iptables -C INPUT -p tcp --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", port, setName),
-				addCmd:   fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -m set --match-set %s src -j ACCEPT", port, setName),
+				checkCmd: fmt.Sprintf("iptables -C INPUT -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", protocol, port, setName),
+				addCmd:   fmt.Sprintf("iptables -A INPUT -p %s --dport %d -m set --match-set %s src -j ACCEPT", protocol, port, setName),
 				ruleType: "允许",
 			},
 			{
-				checkCmd: fmt.Sprintf("iptables -C INPUT -p tcp --dport %d -j LOG --log-prefix \"%s\" 2>/dev/null", port, logPrefix),
-				addCmd:   fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -j LOG --log-prefix \"%s\"", port, logPrefix),
+				checkCmd: fmt.Sprintf("iptables -C INPUT -p %s --dport %d -j LOG --log-prefix \"%s\" 2>/dev/null", protocol, port, logPrefix),
+				addCmd:   fmt.Sprintf("iptables -A INPUT -p %s --dport %d -j LOG --log-prefix \"%s\"", protocol, port, logPrefix),
 				ruleType: "记录",
 			},
 			{
-				checkCmd: fmt.Sprintf("iptables -C INPUT -p tcp --dport %d -j DROP 2>/dev/null", port),
-				addCmd:   fmt.Sprintf("iptables -A INPUT -p tcp --dport %d -j DROP", port),
+				checkCmd: fmt.Sprintf("iptables -C INPUT -p %s --dport %d -j DROP 2>/dev/null", protocol, port),
+				addCmd:   fmt.Sprintf("iptables -A INPUT -p %s --dport %d -j DROP", protocol, port),
 				ruleType: "拒绝",
 			},
 		}
@@ -1043,18 +1044,18 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 
 		rules = []ruleInfo{
 			{
-				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p tcp --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", port, setName),
-				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 1 -p tcp --dport %d -m set --match-set %s src -j ACCEPT", port, setName),
+				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", protocol, port, setName),
+				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 1 -p %s --dport %d -m set --match-set %s src -j ACCEPT", protocol, port, setName),
 				ruleType: "允许",
 			},
 			{
-				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p tcp --dport %d -j LOG --log-prefix \"%s\" 2>/dev/null", port, logPrefix),
-				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 2 -p tcp --dport %d -j LOG --log-prefix \"%s\"", port, logPrefix),
+				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -j LOG --log-prefix \"%s\" 2>/dev/null", protocol, port, logPrefix),
+				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 2 -p %s --dport %d -j LOG --log-prefix \"%s\"", protocol, port, logPrefix),
 				ruleType: "记录",
 			},
 			{
-				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p tcp --dport %d -j DROP 2>/dev/null", port),
-				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 3 -p tcp --dport %d -j DROP", port),
+				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -j DROP 2>/dev/null", protocol, port),
+				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 3 -p %s --dport %d -j DROP", protocol, port),
 				ruleType: "拒绝",
 			},
 		}
@@ -1105,6 +1106,7 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 //	server - 服务器信息
 //	port - 要配置的端口
 //	ipWhitelist - IP白名单
+//	protocol - 协议类型（tcp/udp）
 //	callback - 进度回调函数
 //
 // 返回值:
@@ -1127,7 +1129,7 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, isDocke
 //  6. 创建ipset自启动服务（系统启动时恢复ipset规则）
 //  7. 创建iptables规则（根据Docker环境选择INPUT或DOCKER-USER链）
 //  8. 保存iptables规则
-func configureLinux(client SSHClient, server *models.Server, port int, ipWhitelist string, callback func(message string)) (*ConfigResult, error) {
+func configureLinux(client SSHClient, server *models.Server, port int, ipWhitelist string, protocol string, callback func(message string)) (*ConfigResult, error) {
 	log.Printf("[Firewall] 开始执行Linux环境验证")
 
 	if callback != nil {
@@ -1344,7 +1346,7 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 	}
 
 	// Step 7: 创建iptables规则
-	if err := createIptablesRules(client, port, ipWhitelist, isDocker, callback); err != nil {
+	if err := createIptablesRules(client, port, ipWhitelist, protocol, isDocker, callback); err != nil {
 		log.Printf("[Firewall] 创建iptables规则失败: %v", err)
 		return &ConfigResult{
 			Success: false,
@@ -1382,6 +1384,7 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 //	client - SSH客户端
 //	port - 要取消配置的端口
 //	ipWhitelist - IP白名单（空表示完整取消，非空表示只删除指定IP白名单）
+//	protocol - 协议类型（tcp/udp）
 //	saveCommand - iptables规则保存命令
 //	callback - 进度回调函数
 //
@@ -1410,8 +1413,8 @@ func configureLinux(client SSHClient, server *models.Server, port int, ipWhiteli
 //	  1. 判断是否有对应端口的规则，如果存在则删除规则（INPUT链和DOCKER-USER链）
 //	  2. 判断是否有对应端口的ipset集合，如果存在则删除集合
 //	  3. 保存iptables规则
-func deconfigureLinux(client SSHClient, port int, ipWhitelist string, saveCommand string, callback func(message string)) error {
-	log.Printf("[Firewall] 开始取消配置Linux防火墙，端口: %d, 白名单: %s", port, ipWhitelist)
+func deconfigureLinux(client SSHClient, port int, ipWhitelist string, protocol string, saveCommand string, callback func(message string)) error {
+	log.Printf("[Firewall] 开始取消配置Linux防火墙，端口: %d, 协议: %s, 白名单: %s", port, protocol, ipWhitelist)
 
 	if callback != nil {
 		callback("🚀 开始执行Linux环境验证...\n")
@@ -1547,7 +1550,7 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, saveComman
 		chainName = "INPUT"
 	}
 
-	checkCmd := fmt.Sprintf("iptables -C %s -p tcp --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, port, setName)
+	checkCmd := fmt.Sprintf("iptables -C %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName)
 	_, err = client.Execute(checkCmd)
 	if err != nil {
 		log.Printf("[Firewall] 端口%d的%s链规则不存在", port, chainName)
@@ -1613,7 +1616,7 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, saveComman
 		}
 
 		// 检查规则是否存在（检查ACCEPT规则即可）
-		checkCmd := fmt.Sprintf("iptables -C %s -p tcp --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, port, setName)
+		checkCmd := fmt.Sprintf("iptables -C %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName)
 		_, err = client.Execute(checkCmd)
 		if err != nil {
 			log.Printf("[Firewall] 端口%d的%s链规则不存在", port, chainName)
@@ -1633,15 +1636,15 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, saveComman
 				ruleType string
 			}{
 				{
-					cmd:      fmt.Sprintf("iptables -D %s -p tcp --dport %d -j DROP 2>/dev/null", chainName, port),
+					cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -j DROP 2>/dev/null", chainName, protocol, port),
 					ruleType: "拒绝",
 				},
 				{
-					cmd:      fmt.Sprintf("iptables -D %s -p tcp --dport %d -j LOG --log-prefix \"%s \" 2>/dev/null", chainName, port, logPrefix),
+					cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -j LOG --log-prefix \"%s \" 2>/dev/null", chainName, protocol, port, logPrefix),
 					ruleType: "记录",
 				},
 				{
-					cmd:      fmt.Sprintf("iptables -D %s -p tcp --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, port, setName),
+					cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName),
 					ruleType: "允许",
 				},
 			}

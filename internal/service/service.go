@@ -92,6 +92,7 @@ func (s *serverServiceImpl) ScanServerPorts(server *models.Server) ([]portscanne
 //       port - 目标端口
 //       ipWhitelist - 白名单IP列表（逗号分隔）
 // 返回: 配置结果和错误
+// 协议: 默认按TCP配置
 func (s *serverServiceImpl) ConfigureFirewall(server *models.Server, port int, ipWhitelist string) (*firewall.ConfigResult, error) {
-	return firewall.Configure(server, port, ipWhitelist)
+	return firewall.Configure(server, port, ipWhitelist, "tcp")
 }

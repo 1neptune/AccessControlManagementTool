@@ -3,6 +3,7 @@ package portscanner
 import (
 	"access-control-tool/internal/models"
 	"access-control-tool/internal/ssh"
+	"fmt"
 	"log"
 	"net"
 	"regexp"
@@ -22,56 +23,42 @@ import (
 //	error - 扫描过程中的错误
 //
 // 扫描范围:
+//   - TCP监听端口：ss -tlnp / netstat -tlnp
+//   - UDP监听端口：ss -ulnp / netstat -ulnp
 //   - 包含监听全局地址的端口（0.0.0.0, ::, :::, *）
 //   - 包含监听非回环具体IP地址的端口（如 192.168.100.53:5437）
 //   - 排除仅监听本地回环地址的端口（127.0.0.1, ::1, ::ffff:127.0.0.1 等）
 //   - 支持IPv4和IPv6协议
 //   - 支持ss和netstat两种命令输出格式
-//   - 端口号全局去重：同一端口在多个地址监听（如0.0.0.0:5437和192.168.100.53:5437）时合并为一条记录
-//   - 获取已建立连接的客户端IP列表
+//   - 以"协议+端口"为唯一键去重：同一端口的TCP和UDP监听分别作为独立记录
+//   - 获取已建立连接的客户端IP列表（仅TCP）
 func scanLinuxPorts(client *ssh.Client) ([]PortInfo, error) {
-	log.Printf("[PortScanner] 开始扫描Linux端口（包含非回环地址监听）")
+	log.Printf("[PortScanner] 开始扫描Linux端口（TCP/UDP，包含非回环地址监听）")
 
-	// 执行ss或netstat命令获取TCP监听端口信息
-	// 优先使用ss命令（性能更好），失败时降级到netstat
-	log.Printf("[PortScanner] 执行命令: ss -tlnp 或 netstat -tlnp")
-	listenOutput, err := client.Execute("ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null")
+	// portMap 以"协议/端口号"作为key存储端口信息，实现协议+端口双重去重
+	// 同一端口同时在TCP和UDP上监听时，分别保留一条独立记录
+	portMap := make(map[string]*PortInfo)
+
+	// 执行命令获取TCP监听端口信息（优先ss，失败降级到netstat）
+	log.Printf("[PortScanner] 执行命令扫描TCP监听: ss -tlnp / netstat -tlnp")
+	tcpOutput, err := client.Execute("ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null")
 	if err != nil {
-		log.Printf("[PortScanner] Linux端口扫描失败: %v", err)
+		log.Printf("[PortScanner] Linux TCP端口扫描失败: %v", err)
 		return nil, err
 	}
+	log.Printf("[PortScanner] TCP命令执行成功，输出长度: %d 字节", len(tcpOutput))
 
-	log.Printf("[PortScanner] 命令执行成功，输出长度: %d 字节", len(listenOutput))
-
-	// portMap 以端口号作为key存储端口信息，实现端口号去重
-	// 同一端口号在多个地址监听时，仅保留第一条记录（processPortLine内部处理）
-	portMap := make(map[int]*PortInfo)
-
-	for _, line := range strings.Split(listenOutput, "\n") {
-		line = strings.TrimSpace(line)
-		// 跳过空行和表头行（ss输出以"State"开头，netstat输出以"Active"开头）
-		if line == "" || strings.HasPrefix(line, "State") || strings.HasPrefix(line, "Active") {
-			continue
-		}
-		log.Printf("[PortScanner] 处理行: %s", line)
-
-		// 从当前行提取监听地址和端口（兼容ss和netstat两种格式）
-		ip, portStr, matched := parseListenAddress(line)
-		if !matched {
-			log.Printf("[PortScanner] 跳过非监听端口行: %s", line)
-			continue
-		}
-
-		// 排除回环地址监听的端口，这些端口仅本机访问无需配置访问控制
-		// 回环地址包括：127.0.0.1、::1、::ffff:127.0.0.1（IPv4映射IPv6形式，常见于tcp6监听IPv4回环）
-		if isLoopbackAddress(ip) {
-			log.Printf("[PortScanner] 跳过回环地址监听端口: %s:%s", ip, portStr)
-			continue
-		}
-
-		// 处理端口行，将端口信息加入portMap（按端口号自动去重）
-		processPortLine(line, portStr, portMap)
+	// 执行命令获取UDP监听端口信息（优先ss，失败降级到netstat）
+	log.Printf("[PortScanner] 执行命令扫描UDP监听: ss -ulnp / netstat -ulnp")
+	udpOutput, err := client.Execute("ss -ulnp 2>/dev/null || netstat -ulnp 2>/dev/null")
+	if err != nil {
+		log.Printf("[PortScanner] Linux UDP端口扫描失败: %v", err)
+		return nil, err
 	}
+	log.Printf("[PortScanner] UDP命令执行成功，输出长度: %d 字节", len(udpOutput))
+
+	parseListenLines(tcpOutput, "tcp", portMap)
+	parseListenLines(udpOutput, "udp", portMap)
 
 	log.Printf("[PortScanner] 获取已建立连接的客户端IP")
 	err = fetchConnectedIPs(client, portMap)
@@ -86,18 +73,56 @@ func scanLinuxPorts(client *ssh.Client) ([]PortInfo, error) {
 	}
 
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Port < result[j].Port
+		if result[i].Port != result[j].Port {
+			return result[i].Port < result[j].Port
+		}
+		return result[i].Protocol < result[j].Protocol
 	})
 
-	log.Printf("[PortScanner] Linux端口扫描完成，共发现 %d 个监听端口（已去重）", len(result))
+	log.Printf("[PortScanner] Linux端口扫描完成，共发现 %d 个监听端口（TCP/UDP，按协议+端口去重）", len(result))
 	return result, nil
+}
+
+// parseListenLines 解析指定协议的监听端口命令行，将结果写入portMap
+// 参数:
+//
+//	output   - 命令输出内容
+//	protocol - 协议类型（tcp/udp）
+//	portMap  - 端口信息映射表（key为"协议/端口号"）
+func parseListenLines(output string, protocol string, portMap map[string]*PortInfo) {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		// 跳过空行和表头行（ss输出以"State"开头，netstat输出以"Active"开头）
+		if line == "" || strings.HasPrefix(line, "State") || strings.HasPrefix(line, "Active") {
+			continue
+		}
+		log.Printf("[PortScanner] 处理%s行: %s", protocol, line)
+
+		// 从当前行提取监听地址和端口（兼容ss和netstat两种格式）
+		ip, portStr, matched := parseListenAddress(line, protocol)
+		if !matched {
+			log.Printf("[PortScanner] 跳过非%s监听端口行: %s", protocol, line)
+			continue
+		}
+
+		// 排除回环地址监听的端口，这些端口仅本机访问无需配置访问控制
+		// 回环地址包括：127.0.0.1、::1、::ffff:127.0.0.1（IPv4映射IPv6形式，常见于tcp6监听IPv4回环）
+		if isLoopbackAddress(ip) {
+			log.Printf("[PortScanner] 跳过回环地址监听端口: %s:%s", ip, portStr)
+			continue
+		}
+
+		// 处理端口行，将端口信息加入portMap（按"协议/端口号"去重）
+		processPortLine(line, portStr, protocol, portMap)
+	}
 }
 
 // parseListenAddress 从命令输出行中提取监听的本地地址和端口
 // 兼容ss和netstat两种命令的输出格式，支持IPv4/IPv6/通配符/具体IP地址
 // 参数:
 //
-//	line - 命令输出的单行内容
+//	line      - 命令输出的单行内容
+//	protocol  - 协议类型（tcp/udp），决定匹配的监听状态关键字
 //
 // 返回值:
 //
@@ -107,19 +132,42 @@ func scanLinuxPorts(client *ssh.Client) ([]PortInfo, error) {
 //
 // 支持的命令输出示例:
 //
-//	ss命令:
+//	ss命令(TCP):
 //	  LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1234,fd=3))
 //	  LISTEN 0 128 192.168.100.53:5437 0.0.0.0:* users:(("vastbase",pid=1925782,fd=3))
 //	  LISTEN 0 128 [::]:22 [::]:* users:(("sshd",pid=1234,fd=4))
 //	  LISTEN 0 128 [::ffff:127.0.0.1]:8105 [::]:* users:(("java",pid=281403,fd=39))
 //	  LISTEN 0 128 :::22 :::* users:(("sshd",pid=1234,fd=4))
 //	  LISTEN 0 128 *:80 *:* users:(("nginx",pid=1234,fd=6))
-//	netstat命令:
+//	ss命令(UDP):
+//	  UNCONN 0 0 0.0.0.0:53 0.0.0.0:* users:(("systemd-resolve",pid=789,fd=15))
+//	  UNCONN 0 0 [::]:53 [::]:* users:(("systemd-resolve",pid=789,fd=17))
+//	netstat命令(TCP):
 //	  tcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN 1234/sshd
 //	  tcp 0 0 192.168.100.53:5437 0.0.0.0:* LISTEN 1925782/vastbase
 //	  tcp6 0 0 127.0.0.1:8105 :::* LISTEN 281403/java
 //	  tcp6 0 0 :::22 :::* LISTEN 1234/sshd
-func parseListenAddress(line string) (ip, portStr string, matched bool) {
+//	netstat命令(UDP):
+//	  udp 0 0 0.0.0.0:53 0.0.0.0:* 789/systemd-resolve
+//	  udp6 0 0 :::53 :::* 789/systemd-resolve
+func parseListenAddress(line string, protocol string) (ip, portStr string, matched bool) {
+	if protocol == "udp" {
+		// 匹配ss命令UDP格式：UNCONN Recv-Q Send-Q LocalAddress PeerAddress ...
+		reSS := regexp.MustCompile(`UNCONN\s+\d+\s+\d+\s+(\S+)\s+\S+`)
+		if matches := reSS.FindStringSubmatch(line); len(matches) == 2 {
+			return splitAddrPort(matches[1])
+		}
+
+		// 匹配netstat命令UDP格式：udp[6] Recv-Q Send-Q LocalAddress PeerAddress [State] Pid/Program
+		// 注意: netstat -ulnp 输出没有独立状态列（UDP无状态），进程列直接跟在远程地址后
+		reNetstat := regexp.MustCompile(`udp(?:6)?\s+\d+\s+\d+\s+(\S+)\s+\S+`)
+		if matches := reNetstat.FindStringSubmatch(line); len(matches) == 2 {
+			return splitAddrPort(matches[1])
+		}
+
+		return "", "", false
+	}
+
 	// 匹配ss命令格式：LISTEN Recv-Q Send-Q LocalAddress PeerAddress ...
 	// (\S+) 捕获本地地址（含端口），如 0.0.0.0:22 或 192.168.100.53:5437 或 [::]:22
 	reSS := regexp.MustCompile(`LISTEN(?:ING)?\s+\d+\s+\d+\s+(\S+)\s+\S+`)
@@ -221,11 +269,11 @@ func isLoopbackAddress(ip string) bool {
 	return parsed.IsLoopback()
 }
 
-// fetchConnectedIPs 获取已建立连接的客户端IP列表
+// fetchConnectedIPs 获取已建立连接的客户端IP列表（仅TCP）
 // 参数:
 //
 //	client - SSH客户端
-//	portMap - 端口信息映射表，用于填充ConnectedIPs字段
+//	portMap - 端口信息映射表（key为"协议/端口号"），用于填充ConnectedIPs字段
 //
 // 返回值:
 //
@@ -235,7 +283,7 @@ func isLoopbackAddress(ip string) bool {
 //
 //	ss -tn: ESTAB 0 0 172.19.6.75:22 192.168.21.52:57436
 //	netstat -tn: tcp 0 0 192.168.3.47:46422 192.168.21.52:58155 ESTABLISHED
-func fetchConnectedIPs(client *ssh.Client, portMap map[int]*PortInfo) error {
+func fetchConnectedIPs(client *ssh.Client, portMap map[string]*PortInfo) error {
 	output, err := client.Execute("ss -tn 2>/dev/null || netstat -tn 2>/dev/null")
 	if err != nil {
 		return err
@@ -260,7 +308,7 @@ func fetchConnectedIPs(client *ssh.Client, portMap map[int]*PortInfo) error {
 				continue
 			}
 			remoteIP := matches[3]
-			addConnectedIP(portMap, localPort, remoteIP)
+			addConnectedIP(portMap, "tcp", localPort, remoteIP)
 			continue
 		}
 
@@ -273,7 +321,7 @@ func fetchConnectedIPs(client *ssh.Client, portMap map[int]*PortInfo) error {
 				continue
 			}
 			remoteIP := matches[3]
-			addConnectedIP(portMap, localPort, remoteIP)
+			addConnectedIP(portMap, "tcp", localPort, remoteIP)
 			continue
 		}
 
@@ -286,11 +334,13 @@ func fetchConnectedIPs(client *ssh.Client, portMap map[int]*PortInfo) error {
 // addConnectedIP 将远程客户端IP添加到端口的ConnectedIPs列表中（去重）
 // 参数:
 //
-//	portMap - 端口信息映射表
+//	portMap - 端口信息映射表（key为"协议/端口号"）
+//	protocol - 协议类型（tcp/udp）
 //	localPort - 本地端口号
 //	remoteIP - 远程客户端IP地址
-func addConnectedIP(portMap map[int]*PortInfo, localPort int, remoteIP string) {
-	if portMap[localPort] == nil {
+func addConnectedIP(portMap map[string]*PortInfo, protocol string, localPort int, remoteIP string) {
+	key := fmt.Sprintf("%s/%d", protocol, localPort)
+	if portMap[key] == nil {
 		return
 	}
 
@@ -306,14 +356,14 @@ func addConnectedIP(portMap map[int]*PortInfo, localPort int, remoteIP string) {
 		}
 	}
 
-	for _, ip := range portMap[localPort].ConnectedIPs {
+	for _, ip := range portMap[key].ConnectedIPs {
 		if ip == remoteIP {
 			return
 		}
 	}
 
-	portMap[localPort].ConnectedIPs = append(portMap[localPort].ConnectedIPs, remoteIP)
-	log.Printf("[PortScanner] 端口 %d 发现连接IP: %s", localPort, remoteIP)
+	portMap[key].ConnectedIPs = append(portMap[key].ConnectedIPs, remoteIP)
+	log.Printf("[PortScanner] 端口 %d (%s) 发现连接IP: %s", localPort, protocol, remoteIP)
 }
 
 // refreshConnectedIPsLinux Linux平台刷新指定端口的连接IP
@@ -436,28 +486,32 @@ func GetConnectedIPsForPort(server *models.Server, port int) ([]string, error) {
 	return connectedIPs, nil
 }
 
-// processPortLine 处理端口行，提取端口号和服务名称
+// processPortLine 处理端口行，提取端口号、协议和服务名称
 // 参数:
 //
-//	line - 原始行内容
-//	portStr - 端口号字符串
-//	portMap - 端口信息映射表
-func processPortLine(line, portStr string, portMap map[int]*PortInfo) {
+//	line     - 原始行内容
+//	portStr  - 端口号字符串
+//	protocol - 协议类型（tcp/udp）
+//	portMap  - 端口信息映射表（key为"协议/端口号"）
+func processPortLine(line, portStr string, protocol string, portMap map[string]*PortInfo) {
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
 		return
 	}
 
-	if portMap[port] == nil {
-		portMap[port] = &PortInfo{
+	key := fmt.Sprintf("%s/%d", protocol, port)
+
+	if portMap[key] == nil {
+		portMap[key] = &PortInfo{
 			Port:         port,
+			Protocol:     protocol,
 			ServiceName:  extractServiceName(line),
 			ConnectedIPs: make([]string, 0),
 		}
-		log.Printf("[PortScanner] 发现全局监听端口: %d", port)
+		log.Printf("[PortScanner] 发现全局监听端口: %d (%s)", port, protocol)
 	} else {
-		if name := extractServiceName(line); name != "" && portMap[port].ServiceName == "" {
-			portMap[port].ServiceName = name
+		if name := extractServiceName(line); name != "" && portMap[key].ServiceName == "" {
+			portMap[key].ServiceName = name
 		}
 	}
 }
