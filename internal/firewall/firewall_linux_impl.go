@@ -4,6 +4,7 @@ import (
 	"access-control-tool/internal/models"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 )
 
@@ -465,6 +466,75 @@ func checkPortServiceIsDocker(client SSHClient, port int) (bool, error) {
 	log.Printf("[Firewall] 端口%d服务是否为Docker: %v", port, isDocker)
 
 	return isDocker, nil
+}
+
+// dockerPortMapping 保存Docker端口映射信息
+type dockerPortMapping struct {
+	hostPort      int    // 主机端口（如8090）
+	containerPort int    // 容器端口（如80）
+	protocol      string // 协议（tcp/udp）
+}
+
+// getDockerPortMapping 获取Docker端口映射信息（如 8090 -> 80）
+// 参数:
+//
+//	client - SSH客户端
+//	port - 主机端口号
+//
+// 返回值:
+//
+//	dockerPortMapping - 端口映射信息
+//	bool - 是否查找到了端口映射
+func getDockerPortMapping(client SSHClient, port int) (dockerPortMapping, bool) {
+	cmd := fmt.Sprintf(`docker ps --filter publish=%d --format '{{.ID}}' | xargs -I{} docker inspect --format '{{range $p, $conf := .NetworkSettings.Ports}}{{(index $conf 0).HostPort}}->{{$p}}{{end}}' {}`, port)
+	log.Printf("[Firewall] 查询端口%d的Docker端口映射: %s", port, cmd)
+
+	output, err := client.Execute(cmd)
+	if err != nil {
+		log.Printf("[Firewall] 查询Docker端口映射失败: %v", err)
+		return dockerPortMapping{}, false
+	}
+
+	output = strings.TrimSpace(output)
+	log.Printf("[Firewall] 端口%d的Docker端口映射输出: %s", port, output)
+	if output == "" {
+		log.Printf("[Firewall] 端口%d未找到Docker端口映射", port)
+		return dockerPortMapping{}, false
+	}
+
+	// 输出格式如: "8090->80/tcp"（第一个映射）
+	parts := strings.Split(output, "->")
+	if len(parts) < 2 {
+		log.Printf("[Firewall] 端口%d的Docker端口映射格式无法解析: %s", port, output)
+		return dockerPortMapping{}, false
+	}
+
+	// 主机端口
+	hostPort, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		log.Printf("[Firewall] 解析Docker映射主机端口失败: %s", parts[0])
+		return dockerPortMapping{}, false
+	}
+
+	// 容器端口与协议，格式如 "80/tcp"
+	containerPart := strings.TrimSpace(parts[1])
+	containerTokens := strings.Split(containerPart, "/")
+	containerPort, err := strconv.Atoi(strings.TrimSpace(containerTokens[0]))
+	if err != nil {
+		log.Printf("[Firewall] 解析Docker映射容器端口失败: %s", containerTokens[0])
+		return dockerPortMapping{}, false
+	}
+	protocol := "tcp"
+	if len(containerTokens) > 1 {
+		protocol = strings.ToLower(strings.TrimSpace(containerTokens[1]))
+	}
+
+	log.Printf("[Firewall] 端口%d的Docker映射: %d -> %d/%s", port, hostPort, containerPort, protocol)
+	return dockerPortMapping{
+		hostPort:      hostPort,
+		containerPort: containerPort,
+		protocol:      protocol,
+	}, true
 }
 
 // createIpsetRestoreService 创建ipset自启动服务（先检查是否已存在）
@@ -1042,22 +1112,71 @@ func createIptablesRules(client SSHClient, port int, ipWhitelist string, protoco
 			callback("📋 创建DOCKER-USER链规则...\n")
 		}
 
-		rules = []ruleInfo{
-			{
-				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", protocol, port, setName),
-				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 1 -p %s --dport %d -m set --match-set %s src -j ACCEPT", protocol, port, setName),
-				ruleType: "允许",
-			},
-			{
-				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -j LOG --log-prefix \"%s\" 2>/dev/null", protocol, port, logPrefix),
-				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 2 -p %s --dport %d -j LOG --log-prefix \"%s\"", protocol, port, logPrefix),
-				ruleType: "记录",
-			},
-			{
-				checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -j DROP 2>/dev/null", protocol, port),
-				addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 3 -p %s --dport %d -j DROP", protocol, port),
-				ruleType: "拒绝",
-			},
+		// 检测Docker端口映射（如 8090 -> 80），判断是否需使用原始目标端口匹配
+		// DOCKER-USER链在DNAT之后处理报文，报文目标端口已被改写为容器端口(如80)，
+		// 此时需用 --ctorigdstport 匹配报文的原始目标端口(如8090)
+		useOrigDstPort := false
+		mapping, mappingFound := getDockerPortMapping(client, port)
+		if mappingFound && mapping.hostPort == port && mapping.containerPort != port {
+			log.Printf("[Firewall] 端口%d存在Docker端口映射 %d->%d/%s，使用原始目标端口(--ctorigdstport %d)",
+				port, mapping.hostPort, mapping.containerPort, mapping.protocol, port)
+			useOrigDstPort = true
+			if callback != nil {
+				callback(fmt.Sprintf("📋 检测到Docker端口映射 %d->%d/%s，使用原始目标端口匹配\n",
+					mapping.hostPort, mapping.containerPort, mapping.protocol))
+			}
+		} else if mappingFound {
+			log.Printf("[Firewall] 端口%d映射一致(%d->%d)，使用常规目标端口匹配", port, mapping.hostPort, mapping.containerPort)
+		} else {
+			log.Printf("[Firewall] 端口%d未检测到Docker端口映射，使用常规目标端口匹配", port)
+		}
+
+		if useOrigDstPort {
+			// Docker端口映射场景（如8090->80），报文目标端口已被DNAT改写，必须使用 --ctorigdstport 匹配原始目标端口:
+			// 1. 放行已建立连接和关联连接的回包（必须放最前面）
+			// 2. 放行白名单IP访问新连接
+			// 3. 记录非白名单的新连接
+			// 4. 丢弃非白名单的新连接
+			rules = []ruleInfo{
+				{
+					checkCmd: "iptables -C DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null",
+					addCmd:   "iptables -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+					ruleType: "放行已建立连接",
+				},
+				{
+					checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s -m conntrack --ctorigdstport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", protocol, port, setName),
+					addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 2 -p %s -m conntrack --ctorigdstport %d -m set --match-set %s src -j ACCEPT", protocol, port, setName),
+					ruleType: "允许",
+				},
+				{
+					checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s -m conntrack --ctorigdstport %d -j LOG --log-prefix \"%s\" --log-level 4 2>/dev/null", protocol, port, logPrefix),
+					addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 3 -p %s -m conntrack --ctorigdstport %d -j LOG --log-prefix \"%s\" --log-level 4", protocol, port, logPrefix),
+					ruleType: "记录",
+				},
+				{
+					checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s -m conntrack --ctorigdstport %d -j DROP 2>/dev/null", protocol, port),
+					addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 4 -p %s -m conntrack --ctorigdstport %d -j DROP", protocol, port),
+					ruleType: "拒绝",
+				},
+			}
+		} else {
+			rules = []ruleInfo{
+				{
+					checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", protocol, port, setName),
+					addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 1 -p %s --dport %d -m set --match-set %s src -j ACCEPT", protocol, port, setName),
+					ruleType: "允许",
+				},
+				{
+					checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -j LOG --log-prefix \"%s\" 2>/dev/null", protocol, port, logPrefix),
+					addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 2 -p %s --dport %d -j LOG --log-prefix \"%s\"", protocol, port, logPrefix),
+					ruleType: "记录",
+				},
+				{
+					checkCmd: fmt.Sprintf("iptables -C DOCKER-USER -p %s --dport %d -j DROP 2>/dev/null", protocol, port),
+					addCmd:   fmt.Sprintf("iptables -I DOCKER-USER 3 -p %s --dport %d -j DROP", protocol, port),
+					ruleType: "拒绝",
+				},
+			}
 		}
 	}
 
@@ -1550,8 +1669,29 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, protocol s
 		chainName = "INPUT"
 	}
 
-	checkCmd := fmt.Sprintf("iptables -C %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName)
-	_, err = client.Execute(checkCmd)
+	// 检测Docker端口映射，若存在且主机端口与容器端口不一致（如8090->80），
+	// 规则使用 --ctorigdstport 匹配，取消配置时需使用一致的匹配方式
+	useOrigDstPort := false
+	if isDocker {
+		if mapping, found := getDockerPortMapping(client, port); found && mapping.hostPort == port && mapping.containerPort != port {
+			log.Printf("[Firewall] 端口%d存在Docker端口映射 %d->%d/%s，按原始目标端口规则删除",
+				port, mapping.hostPort, mapping.containerPort, mapping.protocol)
+			useOrigDstPort = true
+			if callback != nil {
+				callback(fmt.Sprintf("📋 检测到Docker端口映射 %d->%d/%s，按原始目标端口规则删除\n",
+					mapping.hostPort, mapping.containerPort, mapping.protocol))
+			}
+		}
+	}
+
+	// 检查规则是否存在（需要与创建时一致的匹配方式）
+	var checkAcceptCmd string
+	if useOrigDstPort {
+		checkAcceptCmd = fmt.Sprintf("iptables -C %s -p %s -m conntrack --ctorigdstport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName)
+	} else {
+		checkAcceptCmd = fmt.Sprintf("iptables -C %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName)
+	}
+	_, err = client.Execute(checkAcceptCmd)
 	if err != nil {
 		log.Printf("[Firewall] 端口%d的%s链规则不存在", port, chainName)
 		if callback != nil {
@@ -1615,8 +1755,13 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, protocol s
 			callback("📋 无白名单，完整取消配置...\n")
 		}
 
-		// 检查规则是否存在（检查ACCEPT规则即可）
-		checkCmd := fmt.Sprintf("iptables -C %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName)
+		// 检查规则是否存在（检查ACCEPT规则即可，需与创建时一致的匹配方式）
+		var checkCmd string
+		if useOrigDstPort {
+			checkCmd = fmt.Sprintf("iptables -C %s -p %s -m conntrack --ctorigdstport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName)
+		} else {
+			checkCmd = fmt.Sprintf("iptables -C %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName)
+		}
 		_, err = client.Execute(checkCmd)
 		if err != nil {
 			log.Printf("[Firewall] 端口%d的%s链规则不存在", port, chainName)
@@ -1631,22 +1776,52 @@ func deconfigureLinux(client SSHClient, port int, ipWhitelist string, protocol s
 
 			// 删除顺序：先删除DROP，再删除LOG，最后删除ACCEPT
 			// 这样可以避免删除过程中导致SSH连接断开
-			delCommands := []struct {
+			var delCommands []struct {
 				cmd      string
 				ruleType string
-			}{
-				{
-					cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -j DROP 2>/dev/null", chainName, protocol, port),
-					ruleType: "拒绝",
-				},
-				{
-					cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -j LOG --log-prefix \"%s \" 2>/dev/null", chainName, protocol, port, logPrefix),
-					ruleType: "记录",
-				},
-				{
-					cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName),
-					ruleType: "允许",
-				},
+			}
+
+			if useOrigDstPort {
+				// Docker端口映射场景（如8090->80），删除使用 --ctorigdstport 创建的规则
+				delCommands = []struct {
+					cmd      string
+					ruleType string
+				}{
+					{
+						cmd:      fmt.Sprintf("iptables -D %s -p %s -m conntrack --ctorigdstport %d -j DROP 2>/dev/null", chainName, protocol, port),
+						ruleType: "拒绝",
+					},
+					{
+						cmd:      fmt.Sprintf("iptables -D %s -p %s -m conntrack --ctorigdstport %d -j LOG --log-prefix \"%s \" --log-level 4 2>/dev/null", chainName, protocol, port, logPrefix),
+						ruleType: "记录",
+					},
+					{
+						cmd:      fmt.Sprintf("iptables -D %s -p %s -m conntrack --ctorigdstport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName),
+						ruleType: "允许",
+					},
+					{
+						cmd:      "iptables -D DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null",
+						ruleType: "放行已建立连接",
+					},
+				}
+			} else {
+				delCommands = []struct {
+					cmd      string
+					ruleType string
+				}{
+					{
+						cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -j DROP 2>/dev/null", chainName, protocol, port),
+						ruleType: "拒绝",
+					},
+					{
+						cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -j LOG --log-prefix \"%s \" 2>/dev/null", chainName, protocol, port, logPrefix),
+						ruleType: "记录",
+					},
+					{
+						cmd:      fmt.Sprintf("iptables -D %s -p %s --dport %d -m set --match-set %s src -j ACCEPT 2>/dev/null", chainName, protocol, port, setName),
+						ruleType: "允许",
+					},
+				}
 			}
 
 			for _, dc := range delCommands {
