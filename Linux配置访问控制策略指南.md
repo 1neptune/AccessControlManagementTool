@@ -316,6 +316,38 @@ iptables -I DOCKER-USER 1 -p tcp --dport 1521 -m set --match-set oracle_allow_ip
 iptables -I DOCKER-USER 2 -p tcp --dport 1521 -j LOG --log-prefix "iptables-drop-oracle: "
 # 拦截其他IP
 iptables -I DOCKER-USER 3 -p tcp --dport 1521 -j DROP
+
+
+针对 80 -> 80 Docker 端口映射场景
+
+
+
+针对 8090 -> 80  Docker 端口映射场景
+
+ipset create 8090_allow_ip hash:net
+
+ipset add 8090_allow_ip 192.168.21.242
+ipset add 8090_allow_ip 192.168.21.52
+
+ipset save > /etc/ipset.conf
+
+docker ps --filter publish=8090 --format '{{.ID}}' | xargs -I{} docker inspect --format '{{range $p, $conf := .NetworkSettings.Ports}}{{(index $conf 0).HostPort}}->{{$p}}{{end}}' {}
+
+# 1. 放行已建立连接和关联连接的回包（必须放最前面）
+iptables -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# 2. 放行白名单 IP 访问 8090 的新连接
+iptables -I DOCKER-USER 2 -p tcp -m conntrack --ctorigdstport 8090 -m set --match-set 8090_allow_ip src -j ACCEPT
+
+# 3. 记录非白名单的新连接
+iptables -I DOCKER-USER 3 -p tcp -m conntrack --ctorigdstport 8090 -j LOG --log-prefix "iptables-drop-8090: " --log-level 4
+
+# 4. 丢弃非白名单的新连接
+iptables -I DOCKER-USER 4 -p tcp -m conntrack --ctorigdstport 8090 -j DROP
+
+service iptables save
+
+
 ```
 
 ## 2.4 永久保存配置
@@ -350,6 +382,7 @@ ExecStart=/bin/sh -c '/sbin/ipset restore -exist < /etc/ipset.conf'
 [Install]
 WantedBy=multi-user.target
 EOF
+
 
 systemctl daemon-reload
 systemctl enable ipset-restore
